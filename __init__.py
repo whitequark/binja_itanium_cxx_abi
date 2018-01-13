@@ -90,6 +90,11 @@ def analyze_cxx_abi(view, start=None, length=None, task=None):
                     vfunc_count += 1
                     continue
 
+                # explicitly reject null pointers; in position-independent code
+                # address zero can belong to the executable segment
+                if vfunc_addr == 0:
+                    break
+
                 # heuristic: pointer to executable memory
                 vfunc_segment = view.get_segment_at(vfunc_addr)
                 if vfunc_segment and vfunc_segment.executable:
