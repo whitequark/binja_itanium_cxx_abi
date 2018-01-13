@@ -37,7 +37,7 @@ def analyze_cxx_abi(view, start=None, length=None, task=None):
 
     def type_info_ty(kind=None):
         type_info_struct = Structure()
-        type_info_struct.append(void_p_ty, 'vtbl')
+        type_info_struct.append(void_p_ty, 'vtable')
         type_info_struct.append(char_p_ty, 'name')
         if kind == 'si_class':
             type_info_struct.append(base_type_info_ptr_ty, 'base_type')
