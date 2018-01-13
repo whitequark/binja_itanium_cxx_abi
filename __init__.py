@@ -16,14 +16,6 @@ def demangle(arch, raw_name):
 def analyze_cxx_abi(view, start=None, length=None, task=None):
     arch = view.arch
 
-    def read(reader, size):
-        if size == 4:
-            return reader.read32()
-        elif size == 8:
-            return reader.read64()
-        else:
-            assert False
-
     void_p_ty = Type.pointer(arch, Type.void())
     char_p_ty = Type.pointer(arch, Type.int(1))
     unsigned_int_ty = Type.int(arch.default_int_size, False)
@@ -50,15 +42,29 @@ def analyze_cxx_abi(view, start=None, length=None, task=None):
         vtable_struct.append(Type.array(void_p_ty, vfunc_count), 'functions')
         return Type.structure_type(vtable_struct)
 
-    symbols = view.get_symbols_of_type(SymbolType.DataSymbol, start, length)
     reader = BinaryReader(view)
-    for n, symbol in enumerate(symbols):
-        if task:
-            task.update_progress(n + 1, len(symbols))
-            if task.cancelled:
-                break
+    def read(size):
+        if size == 4:
+            return reader.read32()
+        elif size == 8:
+            return reader.read64()
+        else:
+            assert False
 
-        if symbol.raw_name.startswith('_ZTS'): # type_info name
+    data_symbols = view.get_symbols_of_type(SymbolType.DataSymbol, start, length)
+    function_symbols = view.get_symbols_of_type(SymbolType.FunctionSymbol, start, length)
+
+    if task:
+        task.set_total(len(data_symbols) + len(function_symbols))
+
+    for symbol in data_symbols + function_symbols:
+        if task and not task.advance():
+            break
+
+        is_data = (symbol.type == SymbolType.DataSymbol)
+        is_code = (symbol.type == SymbolType.FunctionSymbol)
+
+        if is_data and symbol.raw_name.startswith('_ZTS'): # type_info name
             strings = view.get_strings(symbol.address, 1)
             if not strings:
                 continue
@@ -71,20 +77,20 @@ def analyze_cxx_abi(view, start=None, length=None, task=None):
 
             view.define_data_var(symbol.address, char_array_ty(length))
 
-        elif symbol.raw_name.startswith('_ZTI'): # type_info
+        elif is_data and symbol.raw_name.startswith('_ZTI'): # type_info
             reader.offset = symbol.address + arch.address_size * 2
 
             kind = None
 
             # heuristic: is this is an abi::__si_class_type_info?
-            base_or_flags = read(reader, arch.default_int_size)
+            base_or_flags = read(arch.default_int_size)
             base_symbol = view.get_symbol_at(base_or_flags)
             if base_symbol and base_symbol.raw_name.startswith('_ZTI'):
                 kind = 'si_class'
 
             view.define_data_var(symbol.address, type_info_ty(kind))
 
-        elif symbol.raw_name.startswith('_ZTV'): # vtable
+        elif is_data and symbol.raw_name.startswith('_ZTV'): # vtable
             vtable_addr = symbol.address
 
             reader.offset = vtable_addr + arch.address_size * 2
@@ -99,7 +105,7 @@ def analyze_cxx_abi(view, start=None, length=None, task=None):
                         break
 
                     # heuristic: existing function
-                    vfunc_addr = read(reader, arch.address_size)
+                    vfunc_addr = read(arch.address_size)
                     if view.get_function_at(vfunc_addr):
                         vfunc_count += 1
                         continue
@@ -130,7 +136,7 @@ def analyze_cxx_abi(view, start=None, length=None, task=None):
                 if check_next:
                     # heuristic: can another vtable follow this one? let's see if it has typeinfo,
                     # since that should be always true for when we have a virtual base
-                    typeinfo_ptr = read(reader, arch.address_size)
+                    typeinfo_ptr = read(arch.address_size)
                     typeinfo_ptr_symbol = view.get_symbol_at(typeinfo_ptr)
                     if typeinfo_ptr_symbol and typeinfo_ptr_symbol.raw_name.startswith('_ZTI'):
                         vtable_addr = reader.offset - 2 * arch.address_size
@@ -145,7 +151,6 @@ def analyze_cxx_abi(view, start=None, length=None, task=None):
 
                 break
 
-
     view.update_analysis()
 
 
@@ -156,9 +161,16 @@ class CxxAbiAnalysis(BackgroundTaskThread):
         BackgroundTaskThread.__init__(self,
             initial_progress_text=self._PROGRESS_TEXT + "...", can_cancel=True)
         self._view = view
+        self._total = 0
+        self._current = 0
 
-    def update_progress(self, now, total):
-        self.progress = self._PROGRESS_TEXT + " ({}/{})...".format(now, total)
+    def set_total(self, total):
+        self._total = total
+
+    def advance(self):
+        self._current += 1
+        self.progress = "{} ({}/{})...".format(self._PROGRESS_TEXT, self._current, self._total)
+        return not self.cancelled
 
     def run(self):
         try:
