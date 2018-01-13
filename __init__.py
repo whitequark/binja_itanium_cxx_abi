@@ -125,7 +125,7 @@ class CxxAbiAnalysis(BackgroundTaskThread):
         self._view = view
 
     def update_progress(self, now, total):
-        return self._PROGRESS_TEXT + " ({}/{})...".format(now, total)
+        self.progress = self._PROGRESS_TEXT + " ({}/{})...".format(now, total)
 
     def run(self):
         try:
