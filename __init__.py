@@ -57,15 +57,14 @@ def analyze_cxx_abi(view, start=None, length=None, task=None):
             type_info_struct.append(void_p_ty, 'vtbl')
             type_info_struct.append(char_p_ty, 'name')
 
-            if symbol.raw_name[4] == 'N': # class type info
-                reader = BinaryReader(view)
-                reader.seek(symbol.address + arch.address_size * 2)
+            reader = BinaryReader(view)
+            reader.seek(symbol.address + arch.address_size * 2)
 
-                # heuristic: is this is an abi::__si_class_type_info?
-                base_or_flags = read(reader, arch.default_int_size)
-                base_symbol = view.get_symbol_at(base_or_flags)
-                if base_symbol and base_symbol.raw_name.startswith('_ZTI'):
-                    type_info_struct.append(base_type_info_ptr_ty, 'base_type')
+            # heuristic: is this is an abi::__si_class_type_info?
+            base_or_flags = read(reader, arch.default_int_size)
+            base_symbol = view.get_symbol_at(base_or_flags)
+            if base_symbol and base_symbol.raw_name.startswith('_ZTI'):
+                type_info_struct.append(base_type_info_ptr_ty, 'base_type')
 
             type_info_ty = Type.structure_type(type_info_struct)
             view.define_data_var(symbol.address, type_info_ty)
