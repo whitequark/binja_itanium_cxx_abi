@@ -4,13 +4,9 @@ The Itanium C++ ABI plugin provides an analysis that decodes RTTI and vtables, a
 
 ## RTTI and vtable decoding
 
-Before:
+Before / after:
 
-![](doc/vtable-before.png)
-
-After:
-
-![](doc/vtable-after.png)
+<img src="doc/vtable-before.png" width="49%"> <img src="doc/vtable-after.png" width="49%">
 
 ## License
 
