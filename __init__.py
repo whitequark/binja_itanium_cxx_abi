@@ -120,7 +120,7 @@ def analyze_cxx_abi(view, start=None, length=None, task=None):
 
             view.define_data_var(symbol.address, vtable_ty(vfunc_count))
 
-    view.update_analysis_and_wait()
+    view.update_analysis()
 
 
 class CxxAbiAnalysis(BackgroundTaskThread):
