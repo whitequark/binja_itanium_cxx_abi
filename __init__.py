@@ -31,7 +31,26 @@ def analyze_cxx_abi(view, start=None, length=None, task=None):
     base_type_info_ty = Type.named_type(NamedTypeReference(name='std::type_info'))
     base_type_info_ptr_ty = Type.pointer(arch, base_type_info_ty)
 
+    def char_array_ty(length):
+        return Type.array(Type.int(1), strings[0].length)
+
+    def type_info_ty(kind=None):
+        type_info_struct = Structure()
+        type_info_struct.append(void_p_ty, 'vtbl')
+        type_info_struct.append(char_p_ty, 'name')
+        if kind == 'si_class':
+            type_info_struct.append(base_type_info_ptr_ty, 'base_type')
+        return Type.structure_type(type_info_struct)
+
+    def vtable_ty(vfunc_count):
+        vtable_struct = Structure()
+        vtable_struct.append(unsigned_int_ty, 'top_offset')
+        vtable_struct.append(base_type_info_ptr_ty, 'typeinfo')
+        vtable_struct.append(Type.array(void_p_ty, vfunc_count), 'functions')
+        return Type.structure_type(vtable_struct)
+
     symbols = view.get_symbols_of_type(SymbolType.DataSymbol, start, length)
+    reader = BinaryReader(view)
     for n, symbol in enumerate(symbols):
         if task:
             task.update_progress(n, len(symbols))
@@ -49,32 +68,22 @@ def analyze_cxx_abi(view, start=None, length=None, task=None):
                                            short_name=qual_name, full_name=None,
                                            raw_name=symbol.raw_name))
 
-            name_ty = Type.array(Type.int(1), strings[0].length)
-            view.define_data_var(symbol.address, name_ty)
+            view.define_data_var(symbol.address, char_array_ty(length))
 
         elif symbol.raw_name.startswith('_ZTI'): # type_info
-            type_info_struct = Structure()
-            type_info_struct.append(void_p_ty, 'vtbl')
-            type_info_struct.append(char_p_ty, 'name')
-
-            reader = BinaryReader(view)
             reader.seek(symbol.address + arch.address_size * 2)
+
+            kind = None
 
             # heuristic: is this is an abi::__si_class_type_info?
             base_or_flags = read(reader, arch.default_int_size)
             base_symbol = view.get_symbol_at(base_or_flags)
             if base_symbol and base_symbol.raw_name.startswith('_ZTI'):
-                type_info_struct.append(base_type_info_ptr_ty, 'base_type')
+                kind = 'si_class'
 
-            type_info_ty = Type.structure_type(type_info_struct)
-            view.define_data_var(symbol.address, type_info_ty)
+            view.define_data_var(symbol.address, type_info_ty(kind))
 
         elif symbol.raw_name.startswith('_ZTV'): # vtable
-            vtable_struct = Structure()
-            vtable_struct.append(unsigned_int_ty, 'top_offset')
-            vtable_struct.append(base_type_info_ptr_ty, 'typeinfo')
-
-            reader = BinaryReader(view)
             reader.seek(symbol.address + arch.address_size * 2)
 
             vfunc_count = 0
@@ -108,10 +117,8 @@ def analyze_cxx_abi(view, start=None, length=None, task=None):
 
                 # we've fell off the end of the vtable
                 break
-            vtable_struct.append(Type.array(void_p_ty, vfunc_count), 'functions')
 
-            vtable_ty = Type.structure_type(vtable_struct)
-            view.define_data_var(symbol.address, vtable_ty)
+            view.define_data_var(symbol.address, vtable_ty(vfunc_count))
 
     view.update_analysis_and_wait()
 
