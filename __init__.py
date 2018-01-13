@@ -53,7 +53,7 @@ def analyze_cxx_abi(view, start=None, length=None, task=None):
     reader = BinaryReader(view)
     for n, symbol in enumerate(symbols):
         if task:
-            task.update_progress(n, len(symbols))
+            task.update_progress(n + 1, len(symbols))
             if task.cancelled:
                 break
 
