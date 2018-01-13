@@ -1,6 +1,10 @@
 # Binary Ninja Itanium C++ ABI Plugin
 
-The Itanium C++ ABI plugin provides an analysis that decodes RTTI and vtables, and discovers new procedures based on virtual function pointers.
+The Itanium C++ ABI plugin provides a custom demangler, an analysis that decodes RTTI and vtables, and discovers new procedures based on virtual function pointers.
+
+## Custom demangler
+
+The custom demangler converts the mangled names into abstract syntax trees, allowing to extract more type information than the built-in one. For example, it differentiates between complete and base class constructors and destructors.
 
 ## RTTI and vtable decoding
 

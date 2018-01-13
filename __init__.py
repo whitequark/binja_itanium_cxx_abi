@@ -65,10 +65,17 @@ def analyze_cxx_abi(view, start=None, length=None, task=None):
         if name_ast is None:
             log.log_warn("Demangler failed on {}".format(symbol.raw_name))
 
-        symbol = Symbol(symbol.type, symbol.address,
-            short_name=str(name_ast) if name_ast else symbol.raw_name,
-            full_name=None,
-            raw_name=symbol.raw_name)
+        if name_ast:
+            if name_ast.kind == 'function':
+                func_name_ast, args_ast = name_ast.value
+                short_name = str(func_name_ast)
+            else:
+                short_name = str(name_ast)
+            symbol = Symbol(symbol.type, symbol.address,
+                short_name=short_name, full_name=str(name_ast), raw_name=symbol.raw_name)
+        else:
+            symbol = Symbol(symbol.type, symbol.address,
+                short_name=symbol.raw_name, full_name=None, raw_name=symbol.raw_name)
         view.define_auto_symbol(symbol)
 
         if name_ast is None:
