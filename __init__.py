@@ -27,6 +27,7 @@ def analyze_cxx_abi(view, start=None, length=None, task=None):
     void_p_ty = Type.pointer(arch, Type.void())
     char_p_ty = Type.pointer(arch, Type.int(1))
     unsigned_int_ty = Type.int(arch.default_int_size, False)
+    signed_int_ty = Type.int(arch.default_int_size, True)
 
     base_type_info_ty = Type.named_type(NamedTypeReference(name='std::type_info'))
     base_type_info_ptr_ty = Type.pointer(arch, base_type_info_ty)
@@ -44,7 +45,7 @@ def analyze_cxx_abi(view, start=None, length=None, task=None):
 
     def vtable_ty(vfunc_count):
         vtable_struct = Structure()
-        vtable_struct.append(unsigned_int_ty, 'top_offset')
+        vtable_struct.append(signed_int_ty, 'top_offset')
         vtable_struct.append(base_type_info_ptr_ty, 'typeinfo')
         vtable_struct.append(Type.array(void_p_ty, vfunc_count), 'functions')
         return Type.structure_type(vtable_struct)
@@ -71,7 +72,7 @@ def analyze_cxx_abi(view, start=None, length=None, task=None):
             view.define_data_var(symbol.address, char_array_ty(length))
 
         elif symbol.raw_name.startswith('_ZTI'): # type_info
-            reader.seek(symbol.address + arch.address_size * 2)
+            reader.offset = symbol.address + arch.address_size * 2
 
             kind = None
 
@@ -84,41 +85,66 @@ def analyze_cxx_abi(view, start=None, length=None, task=None):
             view.define_data_var(symbol.address, type_info_ty(kind))
 
         elif symbol.raw_name.startswith('_ZTV'): # vtable
-            reader.seek(symbol.address + arch.address_size * 2)
+            vtable_addr = symbol.address
 
-            vfunc_count = 0
+            reader.offset = vtable_addr + arch.address_size * 2
             while True:
-                vfunc_ptr_symbol = view.get_symbol_at(reader.offset)
-                if vfunc_ptr_symbol and vfunc_ptr_symbol.raw_name.startswith('_Z'):
-                    break # any C++ symbol definitely terminates the vtable
+                vfunc_count = 0
+                check_next = True
+                while True:
+                    vfunc_ptr_symbol = view.get_symbol_at(reader.offset)
+                    if vfunc_ptr_symbol and vfunc_ptr_symbol.raw_name.startswith('_Z'):
+                        # any C++ symbol definitely terminates the vtable
+                        check_next = False
+                        break
 
-                # heuristic: existing function
-                vfunc_addr = read(reader, arch.address_size)
-                if view.get_function_at(vfunc_addr):
-                    vfunc_count += 1
-                    continue
+                    # heuristic: existing function
+                    vfunc_addr = read(reader, arch.address_size)
+                    if view.get_function_at(vfunc_addr):
+                        vfunc_count += 1
+                        continue
 
-                # explicitly reject null pointers; in position-independent code
-                # address zero can belong to the executable segment
-                if vfunc_addr == 0:
+                    # explicitly reject null pointers; in position-independent code
+                    # address zero can belong to the executable segment
+                    if vfunc_addr == 0:
+                        check_next = False
+                        break
+
+                    # heuristic: pointer to executable memory
+                    vfunc_segment = view.get_segment_at(vfunc_addr)
+                    if vfunc_addr != 0 and vfunc_segment and vfunc_segment.executable:
+                        view.add_function(vfunc_addr)
+                        vfunc_count += 1
+
+                        qual_name = demangle(arch, symbol.raw_name)
+                        log.log_info('Discovered function at {:#x} via {}'
+                                     .format(vfunc_addr, qual_name))
+                        changed = True
+                        continue
+
+                    # we've fell off the end of the vtable
                     break
 
-                # heuristic: pointer to executable memory
-                vfunc_segment = view.get_segment_at(vfunc_addr)
-                if vfunc_segment and vfunc_segment.executable:
-                    view.add_function(vfunc_addr)
-                    vfunc_count += 1
+                view.define_data_var(vtable_addr, vtable_ty(vfunc_count))
 
-                    qual_name = demangle(arch, symbol.raw_name)
-                    log.log_info('Discovered function at {:#x} via {}'
-                                 .format(vfunc_addr, qual_name))
-                    changed = True
-                    continue
+                if check_next:
+                    # heuristic: can another vtable follow this one? let's see if it has typeinfo,
+                    # since that should be always true for when we have a virtual base
+                    typeinfo_ptr = read(reader, arch.address_size)
+                    typeinfo_ptr_symbol = view.get_symbol_at(typeinfo_ptr)
+                    if typeinfo_ptr_symbol and typeinfo_ptr_symbol.raw_name.startswith('_ZTI'):
+                        vtable_addr = reader.offset - 2 * arch.address_size
 
-                # we've fell off the end of the vtable
+                        # documentat it with a symbol
+                        secondary_symbol_name = '{}_secondary_{:x}'.format(symbol.short_name,
+                            vtable_addr - symbol.address)
+                        secondary_symbol = Symbol(SymbolType.DataSymbol, vtable_addr,
+                                                  short_name=secondary_symbol_name)
+                        view.define_auto_symbol(secondary_symbol)
+                        continue
+
                 break
 
-            view.define_data_var(symbol.address, vtable_ty(vfunc_count))
 
     view.update_analysis()
 
