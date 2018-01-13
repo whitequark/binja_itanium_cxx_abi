@@ -80,11 +80,7 @@ class Node(namedtuple('Node', 'kind value')):
                 return 'operator' + self.value
         elif self.kind == 'cv_qual':
             qualifiers, ty = self.value
-            str_qualifiers = ' '.join(list(qualifiers))
-            if ty.kind in ('pointer', 'lvalue', 'rvalue'):
-                return str(ty) + ' ' + str_qualifiers
-            else:
-                return str_qualifiers + ' ' + str(ty)
+            return ' '.join([str(ty)] + list(qualifiers))
         elif self.kind == 'pointer':
             return str(self.value) + '*'
         elif self.kind == 'lvalue':
@@ -201,6 +197,28 @@ _builtin_types = {
 }
 
 
+def _handle_cv(qualifiers, node):
+    qualifier_set = set()
+    if 'r' in qualifiers:
+        qualifier_set.add('restrict')
+    if 'V' in qualifiers:
+        qualifier_set.add('volatile')
+    if 'K' in qualifiers:
+        qualifier_set.add('const')
+    if qualifier_set:
+        return Node('cv_qual', (qualifier_set, node))
+    return node
+
+def _handle_indirect(qualifier, node):
+    if qualifier == 'P':
+        return Node('pointer', node)
+    elif qualifier == 'R':
+        return Node('lvalue', node)
+    elif qualifier == 'O':
+        return Node('rvalue', node)
+    return node
+
+
 def _parse_until_end(cursor, kind, fn):
     nodes = []
     while not cursor.accept('E'):
@@ -254,6 +272,8 @@ def _parse_name(cursor):
         node = Node('nested_name', [Node('name', 'std'), name])
     elif match.group('nested_name') is not None:
         node = _parse_until_end(cursor, 'nested_name', _parse_name)
+        node = _handle_cv(match.group('cv_qual'), node)
+        node = _handle_indirect(match.group('ref_qual'), node)
     elif match.group('template_args') is not None:
         node = _parse_until_end(cursor, 'template_args', _parse_type)
     if node is None:
@@ -283,27 +303,15 @@ def _parse_type(cursor):
     elif match.group('builtin_type') is not None:
         return Node('name', _builtin_types[match.group('builtin_type')])
     elif match.group('qualified_type') is not None:
-        qualifiers = set()
-        if 'r' in match.group('qualified_type'):
-            qualifiers.add('restrict')
-        if 'V' in match.group('qualified_type'):
-            qualifiers.add('volatile')
-        if 'K' in match.group('qualified_type'):
-            qualifiers.add('const')
         ty = _parse_type(cursor)
         if ty is None:
             return None
-        return Node('cv_qual', (qualifiers, ty))
+        return _handle_cv(match.group('qualified_type'), ty)
     elif match.group('indirect_type') is not None:
         ty = _parse_type(cursor)
         if ty is None:
             return None
-        if match.group('indirect_type') == 'P':
-            return Node('pointer', ty)
-        elif match.group('indirect_type') == 'R' is not None:
-            return Node('lvalue', ty)
-        elif match.group('indirect_type') == 'O' is not None:
-            return Node('rvalue', ty)
+        return _handle_indirect(match.group('indirect_type'), ty)
     elif match.group('expr_primary') is not None:
         return _parse_expr_primary(cursor)
 
