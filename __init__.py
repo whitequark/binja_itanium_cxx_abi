@@ -3,15 +3,9 @@ from binaryninja.plugin import PluginCommand, BackgroundTaskThread
 from binaryninja.binaryview import BinaryReader
 from binaryninja.types import Symbol, Type, Structure, NamedTypeReference
 from binaryninja.enums import SymbolType
-from binaryninja.demangle import demangle_gnu3, get_qualified_name
 
+from .demangler import parse as parse_mangled
 
-def demangle(arch, raw_name):
-    ty, name = demangle_gnu3(arch, raw_name)
-    if isinstance(name, list):
-        return get_qualified_name(name)
-    else:
-        return name
 
 def analyze_cxx_abi(view, start=None, length=None, task=None):
     arch = view.arch
@@ -61,23 +55,33 @@ def analyze_cxx_abi(view, start=None, length=None, task=None):
         if task and not task.advance():
             break
 
+        if not symbol.raw_name.startswith('_Z'):
+            continue
+
         is_data = (symbol.type == SymbolType.DataSymbol)
         is_code = (symbol.type == SymbolType.FunctionSymbol)
 
-        if is_data and symbol.raw_name.startswith('_ZTS'): # type_info name
+        name_ast = parse_mangled(symbol.raw_name)
+        if name_ast is None:
+            log.log_warn("Demangler failed on {}".format(symbol.raw_name))
+
+        symbol = Symbol(symbol.type, symbol.address,
+            short_name=str(name_ast) if name_ast else symbol.raw_name,
+            full_name=None,
+            raw_name=symbol.raw_name)
+        view.define_auto_symbol(symbol)
+
+        if name_ast is None:
+            continue
+
+        elif is_data and name_ast.kind == 'typeinfo_name':
             strings = view.get_strings(symbol.address, 1)
             if not strings:
                 continue
 
-            # _ZTS... symbols are not named correctly, fix.
-            qual_name = demangle(arch, symbol.raw_name)
-            view.define_auto_symbol(Symbol(symbol.type, symbol.address,
-                                           short_name=qual_name, full_name=None,
-                                           raw_name=symbol.raw_name))
-
             view.define_data_var(symbol.address, char_array_ty(length))
 
-        elif is_data and symbol.raw_name.startswith('_ZTI'): # type_info
+        elif is_data and name_ast.kind == 'typeinfo':
             reader.offset = symbol.address + arch.address_size * 2
 
             kind = None
@@ -90,7 +94,7 @@ def analyze_cxx_abi(view, start=None, length=None, task=None):
 
             view.define_data_var(symbol.address, type_info_ty(kind))
 
-        elif is_data and symbol.raw_name.startswith('_ZTV'): # vtable
+        elif is_data and name_ast.kind == 'vtable':
             vtable_addr = symbol.address
 
             reader.offset = vtable_addr + arch.address_size * 2
@@ -122,9 +126,8 @@ def analyze_cxx_abi(view, start=None, length=None, task=None):
                         view.add_function(vfunc_addr)
                         vfunc_count += 1
 
-                        qual_name = demangle(arch, symbol.raw_name)
                         log.log_info('Discovered function at {:#x} via {}'
-                                     .format(vfunc_addr, qual_name))
+                                     .format(vfunc_addr, symbol.full_name or symbol.short_name))
                         changed = True
                         continue
 
