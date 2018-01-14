@@ -79,6 +79,9 @@ class _Cursor:
 
 
 class Node(namedtuple('Node', 'kind value')):
+    def __repr__(self):
+        return "<Node {} {}>".format(self.kind, repr(self.value))
+
     def __str__(self):
         if self.kind == 'name':
             return self.value
@@ -135,33 +138,55 @@ class Node(namedtuple('Node', 'kind value')):
         else:
             assert False
 
-    def __repr__(self):
-        return "<Node {} {}>".format(self.kind, repr(self.value))
+    def map(self, f):
+        if self.kind in ('oper_cast', 'pointer', 'lvalue', 'rvalue',
+                         'vtable', 'vtt', 'typeinfo', 'typeinfo_name'):
+            return self._replace(value=f(self.value))
+        elif self.kind in ('qual_name', 'tpl_args'):
+            return self._replace(value=tuple(map(f, self.value)))
+        else:
+            return self
 
 
 class QualNode(namedtuple('QualNode', 'kind value qual')):
+    def __repr__(self):
+        return "<QualNode {} {} {}>".format(self.kind, repr(self.qual), repr(self.value))
+
     def __str__(self):
         if self.kind == 'cv_qual':
             return ' '.join([str(self.value)] + list(self.qual))
         else:
             assert False
 
-    def __repr__(self):
-        return "<QualNode {} {} {}>".format(self.kind, repr(self.qual), repr(self.value))
+    def map(self, f):
+        if self.kind == 'cv_qual':
+            return self._replace(value=f(self.value))
+        else:
+            return self
 
 
 class CastNode(namedtuple('CastNode', 'kind value ty')):
+    def __repr__(self):
+        return "<CastNode {} {} {}>".format(self.kind, repr(self.ty), repr(self.value))
+
     def __str__(self):
         if self.kind == 'literal':
             return '(' + str(self.ty) + ')' + str(self.value)
         else:
             assert False
 
-    def __repr__(self):
-        return "<CastNode {} {} {}>".format(self.kind, repr(self.ty), repr(self.value))
+    def map(self, f):
+        if self.kind == 'literal':
+            return self._replace(ty=f(self.ty))
+        else:
+            return self
 
 
 class FuncNode(namedtuple('FuncNode', 'kind name arg_tys ret_ty')):
+    def __repr__(self):
+        return "<FuncNode {} {} {} {}>".format(self.kind, repr(self.name),
+                                               repr(self.arg_tys), repr(self.ret_ty))
+
     def __str__(self):
         if self.kind == 'func':
             result = ""
@@ -175,9 +200,13 @@ class FuncNode(namedtuple('FuncNode', 'kind name arg_tys ret_ty')):
         else:
             assert False
 
-    def __repr__(self):
-        return "<FuncNode {} {} {} {}>".format(self.kind, repr(self.name),
-                                               repr(self.arg_tys), repr(self.ret_ty))
+    def map(self, f):
+        if self.kind == 'func':
+            return self._replace(name=f(self.name),
+                                 arg_tys=tuple(map(f, self.arg_tys)),
+                                 ret_ty=f(self.ret_ty) if self.ret_ty else None)
+        else:
+            return self
 
 
 _ctor_dtor_map = {
@@ -408,6 +437,8 @@ def _parse_type(cursor):
         return _handle_cv(match.group('qualified_type'), ty)
     elif match.group('template_param') is not None:
         seq_id = cursor.advance_until('_')
+        if seq_id is None:
+            return None
         if seq_id == '':
             return Node('tpl_param', 0)
         else:
@@ -504,8 +535,23 @@ def _parse_mangled_name(cursor):
             return name
 
 
+def _expand_template_args(ast):
+    if ast.kind == 'func' and ast.name.kind == 'qual_name':
+        name_suffix = ast.name.value[-1]
+        if name_suffix.kind == 'tpl_args':
+            tpl_args = name_suffix.value
+            def mapper(node):
+                if node.kind == 'tpl_param' and node.value < len(tpl_args):
+                    return tpl_args[node.value]
+                return node.map(mapper)
+            return mapper(ast)
+    return ast
+
 def parse(raw):
-    return _parse_mangled_name(_Cursor(raw))
+    ast = _parse_mangled_name(_Cursor(raw))
+    if ast:
+        ast = _expand_template_args(ast)
+    return ast
 
 # ================================================================================================
 
@@ -543,10 +589,10 @@ class TestDemangler(unittest.TestCase):
         self.assertDemangles('_Zcvi', 'operator int')
 
     def test_std_substs(self):
-        self.assertDemangles('_ZSt', None)
         self.assertDemangles('_ZSt3foo', 'std::foo')
         self.assertDemangles('_ZStN3fooE', 'std::foo')
         self.assertDemangles('_ZSs', 'std::string')
+        self.assertDemangles('_ZSt', None)
 
     def test_nested_name(self):
         self.assertDemangles('_ZN3fooE', 'foo')
@@ -556,10 +602,12 @@ class TestDemangler(unittest.TestCase):
         self.assertDemangles('_ZNV3fooE', 'foo volatile')
         self.assertDemangles('_ZNKR3fooE', 'foo const&')
         self.assertDemangles('_ZNKO3fooE', 'foo const&&')
+        self.assertDemangles('_ZNKO3foo', None)
 
     def test_template_args(self):
         self.assertDemangles('_Z3fooIcE', 'foo<char>')
         self.assertDemangles('_ZN3fooIcEE', 'foo<char>')
+        self.assertDemangles('_Z3fooI', None)
 
     def test_builtin_types(self):
         for ty in _builtin_types:
@@ -570,6 +618,10 @@ class TestDemangler(unittest.TestCase):
         self.assertDemangles('_Z1fIKiE', 'f<int const>')
         self.assertDemangles('_Z1fIViE', 'f<int volatile>')
         self.assertDemangles('_Z1fIVVViE', 'f<int volatile>')
+
+    def test_template_param(self):
+        self.assertDemangles('_ZN1fIciEEvT_PT0_', 'void f<char, int>(char, int*)')
+        self.assertDemangles('_ZN1fIciEEvT_PT0', None)
 
     def test_function_type(self):
         self.assertDemangles('_Z1fv', 'f()')

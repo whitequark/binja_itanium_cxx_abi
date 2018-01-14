@@ -48,6 +48,7 @@ def analyze_cxx_abi(view, start=None, length=None, task=None):
     data_symbols = view.get_symbols_of_type(SymbolType.DataSymbol, start, length)
     function_symbols = view.get_symbols_of_type(SymbolType.FunctionSymbol, start, length)
 
+    demangler_failures = 0
     if task:
         task.set_total(len(data_symbols) + len(function_symbols))
 
@@ -64,11 +65,11 @@ def analyze_cxx_abi(view, start=None, length=None, task=None):
         name_ast = parse_mangled(symbol.raw_name)
         if name_ast is None:
             log.log_warn("Demangler failed on {}".format(symbol.raw_name))
+            demangler_failures += 1
 
         if name_ast:
-            if name_ast.kind == 'function':
-                func_name_ast, args_ast = name_ast.value
-                short_name = str(func_name_ast)
+            if name_ast.kind == 'func':
+                short_name = str(name_ast.name)
             else:
                 short_name = str(name_ast)
             symbol = Symbol(symbol.type, symbol.address,
@@ -162,6 +163,9 @@ def analyze_cxx_abi(view, start=None, length=None, task=None):
                 break
 
     view.update_analysis()
+
+    if demangler_failures:
+        log.log_warn('{} demangler failures'.format(demangler_failures))
 
 
 class CxxAbiAnalysis(BackgroundTaskThread):
