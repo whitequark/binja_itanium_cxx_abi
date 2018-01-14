@@ -11,8 +11,9 @@ Name nodes:
       the type of constructor
     * `dtor`: `node.value` is one of `"deleting"`, `"complete"`, or `"base"`, specifying
       the type of destructor
-    * `operator`: `node.value` (`str`) holds a symbolic operator name, without the keyword
+    * `oper`: `node.value` (`str`) holds a symbolic operator name, without the keyword
       "operator"
+    * `oper_cast`: `node.value` holds a type node
     * `tpl_args`: `node.value` (`tuple`) holds a sequence of type nodes
     * `qual_name`: `node.value` (`tuple`) holds a sequence of `name` and `tpl_args` nodes,
       possibly ending in a `ctor`, `dtor` or `operator` node
@@ -20,13 +21,13 @@ Name nodes:
 Type nodes:
     * `name` and `qual_name` specify a type by its name
     * `pointer`, `lvalue` and `rvalue`: `node.value` holds a pointee type node
-    * `literal`: `node.value` (`str`) holds the literal representation as-is,
-      `node.qual` holds a type node specifying the type of the literal
     * `cv_qual`: `node.value` holds a type node, `node.qual` (`set`) is any of
       `"const"`, `"volatile"`, or `"restrict"`
+    * `literal`: `node.value` (`str`) holds the literal representation as-is,
+      `node.ty` holds a type node specifying the type of the literal
     * `function`: `node.name` holds a name node specifying the function name,
-      `node.ret` holds a type node specifying the return type of a template function,
-      if any, or `None`, ``node.args` (`tuple`) holds a sequence of type nodes
+      `node.ret_ty` holds a type node specifying the return type of a template function,
+      if any, or `None`, ``node.arg_tys` (`tuple`) holds a sequence of type nodes
       specifying thefunction arguments
 
 Special nodes:
@@ -108,23 +109,19 @@ class Node(namedtuple('Node', 'kind value')):
                 return '{base dtor}'
             else:
                 assert False
-        elif self.kind == 'operator':
+        elif self.kind == 'oper':
             if self.value.startswith('new') or self.value.startswith('delete'):
                 return 'operator ' + self.value
             else:
                 return 'operator' + self.value
+        elif self.kind == 'oper_cast':
+            return 'operator ' + str(self.value)
         elif self.kind == 'pointer':
             return str(self.value) + '*'
         elif self.kind == 'lvalue':
             return str(self.value) + '&'
         elif self.kind == 'rvalue':
             return str(self.value) + '&&'
-        elif self.kind == 'function':
-            name, args = self.value
-            if args == (Node('name', 'void'),):
-                return str(name) + '()'
-            else:
-                return str(name) + '(' + ', '.join(map(str, args)) + ')'
         elif self.kind == 'tpl_param':
             return '{T' + str(self.value) + '}'
         elif self.kind == 'vtable':
@@ -162,6 +159,25 @@ class CastNode(namedtuple('CastNode', 'kind value ty')):
 
     def __repr__(self):
         return "<CastNode {} {} {}>".format(self.kind, repr(self.ty), repr(self.value))
+
+
+class FuncNode(namedtuple('FuncNode', 'kind name arg_tys ret_ty')):
+    def __str__(self):
+        if self.kind == 'func':
+            result = ""
+            if self.ret_ty:
+                result += str(self.ret_ty) + ' '
+            if self.arg_tys == (Node('name', 'void'),):
+                result += str(self.name) + '()'
+            else:
+                result += str(self.name) + '(' + ', '.join(map(str, self.arg_tys)) + ')'
+            return result
+        else:
+            assert False
+
+    def __repr__(self):
+        return "<FuncNode {} {} {} {}>".format(self.kind, repr(self.name),
+                                               repr(self.arg_tys), repr(self.ret_ty))
 
 
 _ctor_dtor_map = {
@@ -290,7 +306,7 @@ def _parse_until_end(cursor, kind, fn):
         if node is None or cursor.at_end():
             return None
         nodes.append(node)
-    return Node(kind, nodes)
+    return Node(kind, tuple(nodes))
 
 def _parse_source_name(cursor, length):
     name_len = int(length)
@@ -308,6 +324,7 @@ _NAME_RE = re.compile(r"""
 (?P<operator_name>      nw|na|dl|da|ps|ng|ad|de|co|pl|mi|ml|dv|rm|an|or|
                         eo|aS|pL|mI|mL|dV|rM|aN|oR|eO|ls|rs|lS|rS|eq|ne|
                         lt|gt|le|ge|nt|aa|oo|pp|mm|cm|pm|pt|cl|ix|qu) |
+(?P<operator_cv>        cv) |
 (?P<std_prefix>         St) |
 (?P<nested_name>        N (?P<cv_qual> [rVK]*) (?P<ref_qual> [RO]?)) |
 (?P<template_args>      I)
@@ -328,17 +345,31 @@ def _parse_name(cursor):
     elif match.group('std_name') is not None:
         node = Node('qual_name', _std_names[match.group('std_name')])
     elif match.group('operator_name') is not None:
-        node = Node('operator', _operators[match.group('operator_name')])
+        node = Node('oper', _operators[match.group('operator_name')])
+    elif match.group('operator_cv') is not None:
+        ty = _parse_type(cursor)
+        if ty is None:
+            return None
+        node = Node('oper_cast', ty)
     elif match.group('std_prefix') is not None:
         name = _parse_name(cursor)
         if name is None:
             return None
         if name.kind == 'qual_name':
-            node = Node('qual_name', [Node('name', 'std')] + name.value)
+            node = Node('qual_name', (Node('name', 'std'),) + name.value)
         else:
-            node = Node('qual_name', [Node('name', 'std'), name])
+            node = Node('qual_name', (Node('name', 'std'), name))
     elif match.group('nested_name') is not None:
-        node = _parse_until_end(cursor, 'qual_name', _parse_name)
+        nodes = []
+        while not cursor.accept('E'):
+            name = _parse_name(cursor)
+            if name is None or cursor.at_end():
+                return None
+            if name.kind == 'qual_name':
+                nodes += name.value
+            else:
+                nodes.append(name)
+        node = Node('qual_name', tuple(nodes))
         node = _handle_cv(match.group('cv_qual'), node)
         node = _handle_indirect(match.group('ref_qual'), node)
     elif match.group('template_args') is not None:
@@ -350,7 +381,7 @@ def _parse_name(cursor):
         templ_args = _parse_until_end(cursor, 'tpl_args', _parse_type)
         if templ_args is None:
             return None
-        node = Node('qual_name', [node, templ_args])
+        node = Node('qual_name', (node, templ_args))
 
     return node
 
@@ -450,16 +481,25 @@ def _parse_mangled_name(cursor):
         name = _parse_name(cursor)
         if name is None:
             return None
+        if cursor.at_end():
+            return name
 
-        arg_types = []
-        while not cursor.at_end():
-            arg_type = _parse_type(cursor)
-            if arg_type is None:
+        if name.kind == 'qual_name' and name.value[-1].kind == 'tpl_args':
+            ret_ty = _parse_type(cursor)
+            if ret_ty is None:
                 return None
-            arg_types.append(arg_type)
+        else:
+            ret_ty = None
 
-        if arg_types:
-            return Node('function', (name, tuple(arg_types)))
+        arg_tys = []
+        while not cursor.at_end():
+            arg_ty = _parse_type(cursor)
+            if arg_ty is None:
+                return None
+            arg_tys.append(arg_ty)
+
+        if arg_tys:
+            return FuncNode('func', name, tuple(arg_tys), ret_ty)
         else:
             return name
 
@@ -500,10 +540,12 @@ class TestDemangler(unittest.TestCase):
         self.assertDemangles('_Zna', 'operator new[]')
         self.assertDemangles('_Zdl', 'operator delete')
         self.assertDemangles('_Zda', 'operator delete[]')
+        self.assertDemangles('_Zcvi', 'operator int')
 
     def test_std_substs(self):
         self.assertDemangles('_ZSt', None)
         self.assertDemangles('_ZSt3foo', 'std::foo')
+        self.assertDemangles('_ZStN3fooE', 'std::foo')
         self.assertDemangles('_ZSs', 'std::string')
 
     def test_nested_name(self):
@@ -521,23 +563,28 @@ class TestDemangler(unittest.TestCase):
 
     def test_builtin_types(self):
         for ty in _builtin_types:
-            if ty == 'v':
-                continue
-            self.assertDemangles('_Z1f' + ty, 'f(' + _builtin_types[ty] + ')')
-        self.assertDemangles('_Z1fv', 'f()')
+            self.assertDemangles('_Z1fI' + ty + 'E', 'f<' + _builtin_types[ty] + '>')
 
     def test_qualified_type(self):
-        self.assertDemangles('_Z1fri', 'f(int restrict)')
-        self.assertDemangles('_Z1fKi', 'f(int const)')
-        self.assertDemangles('_Z1fVi', 'f(int volatile)')
-        self.assertDemangles('_Z1fVVVi', 'f(int volatile)')
+        self.assertDemangles('_Z1fIriE', 'f<int restrict>')
+        self.assertDemangles('_Z1fIKiE', 'f<int const>')
+        self.assertDemangles('_Z1fIViE', 'f<int volatile>')
+        self.assertDemangles('_Z1fIVVViE', 'f<int volatile>')
+
+    def test_function_type(self):
+        self.assertDemangles('_Z1fv', 'f()')
+        self.assertDemangles('_Z1fi', 'f(int)')
+        self.assertDemangles('_Z1fic', 'f(int, char)')
+        self.assertDemangles('_ZN1fEic', 'f(int, char)')
+        self.assertDemangles('_ZN1fIEEic', 'int f<>(char)')
+        self.assertDemangles('_ZN1fIEC1Eic', 'f<>::{ctor}(int, char)')
 
     def test_indirect_type(self):
-        self.assertDemangles('_Z1fPi', 'f(int*)')
-        self.assertDemangles('_Z1fRi', 'f(int&)')
-        self.assertDemangles('_Z1fOi', 'f(int&&)')
-        self.assertDemangles('_Z1fKRi', 'f(int& const)')
-        self.assertDemangles('_Z1fRKi', 'f(int const&)')
+        self.assertDemangles('_Z1fIPiE', 'f<int*>')
+        self.assertDemangles('_Z1fIRiE', 'f<int&>')
+        self.assertDemangles('_Z1fIOiE', 'f<int&&>')
+        self.assertDemangles('_Z1fIKRiE', 'f<int& const>')
+        self.assertDemangles('_Z1fIRKiE', 'f<int const&>')
 
     def test_literal(self):
         self.assertDemangles('_Z1fILi1EE', 'f<(int)1>')
