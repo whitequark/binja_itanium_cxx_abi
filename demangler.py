@@ -651,7 +651,7 @@ def _parse_special(cursor):
 
 
 _MANGLED_NAME_RE = re.compile(r"""
-(?P<mangled_name>       _Z)
+(?P<mangled_name>       _?_Z)
 """, re.X)
 
 def _parse_mangled_name(cursor):

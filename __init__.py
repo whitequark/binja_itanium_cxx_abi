@@ -170,12 +170,14 @@ def analyze_cxx_abi(view, start=None, length=None, task=None):
     if task:
         task.set_total(len(symbols))
 
+    mangled_re = re.compile('_?_Z')
+
     demangler_failures = 0
     for symbol in symbols:
         if task and not task.advance():
             break
 
-        if not symbol.raw_name.startswith('_Z'):
+        if not mangled_re.match(symbol.raw_name):
             continue
 
         is_data = (symbol.type == SymbolType.DataSymbol)
