@@ -62,9 +62,13 @@ def analyze_cxx_abi(view, start=None, length=None, task=None):
         is_data = (symbol.type == SymbolType.DataSymbol)
         is_code = (symbol.type == SymbolType.FunctionSymbol)
 
-        name_ast = parse_mangled(symbol.raw_name)
-        if name_ast is None:
-            log.log_warn("Demangler failed on {}".format(symbol.raw_name))
+        try:
+            name_ast = parse_mangled(symbol.raw_name)
+            if name_ast is None:
+                log.log_warn("Demangler failed to recognize {}".format(symbol.raw_name))
+                demangler_failures += 1
+        except NotImplementedError as e:
+            log.log_warn("Demangler feature missing on {}: {}".format(symbol.raw_name, str(e)))
             demangler_failures += 1
 
         if name_ast:

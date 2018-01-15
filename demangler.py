@@ -27,6 +27,7 @@ Type nodes:
     * `literal`: `node.value` (`str`) holds the literal representation as-is,
       `node.ty` holds a type node specifying the type of the literal
     * `tpl_arg_pack`: `node.value` (`tuple`) holds a sequence of type nodes
+    * `expand_arg_pack`: `node.value` holds an argument pack node
     * `function`: `node.name` holds a name node specifying the function name,
       `node.ret_ty` holds a type node specifying the return type of a template function,
       if any, or `None`, ``node.arg_tys` (`tuple`) holds a sequence of type nodes
@@ -77,7 +78,7 @@ class _Cursor:
         return match
 
     def add_subst(self, node):
-        print("S[{}] = {}".format(len(self._substs), str(node)))
+        # print("S[{}] = {}".format(len(self._substs), str(node)))
         self._substs[len(self._substs)] = node
 
     def resolve_subst(self, seq_id):
@@ -107,6 +108,11 @@ class Node(namedtuple('Node', 'kind value')):
             return '<' + ', '.join(map(str, self.value)) + '>'
         elif self.kind == 'tpl_arg_pack':
             return ', '.join(map(str, self.value))
+        elif self.kind == 'expand_arg_pack':
+            if self.value.kind == 'rvalue' and self.value.value.kind == 'tpl_arg_pack':
+                return str(self.value.value)
+            else:
+                return '{expand ' + str(self.value) + '}'
         elif self.kind == 'ctor':
             if self.value == 'complete':
                 return '{ctor}'
@@ -154,10 +160,10 @@ class Node(namedtuple('Node', 'kind value')):
             assert False
 
     def map(self, f):
-        if self.kind in ('oper_cast', 'pointer', 'lvalue', 'rvalue',
+        if self.kind in ('oper_cast', 'pointer', 'lvalue', 'rvalue', 'expand_arg_pack',
                          'vtable', 'vtt', 'typeinfo', 'typeinfo_name'):
             return self._replace(value=f(self.value))
-        elif self.kind in ('qual_name', 'tpl_args'):
+        elif self.kind in ('qual_name', 'tpl_args', 'tpl_arg_pack'):
             return self._replace(value=tuple(map(f, self.value)))
         else:
             return self
@@ -465,8 +471,10 @@ _TYPE_RE = re.compile(r"""
 (?P<qualified_type>     [rVK]+) |
 (?P<template_param>     T) |
 (?P<indirect_type>      [PRO]) |
+(?P<expression>         X) |
 (?P<expr_primary>       (?= L)) |
-(?P<template_arg_pack>  J)
+(?P<template_arg_pack>  J) |
+(?P<arg_pack_expansion> Dp)
 """, re.X)
 
 def _parse_type(cursor):
@@ -494,10 +502,15 @@ def _parse_type(cursor):
             return None
         node = _handle_indirect(match.group('indirect_type'), ty)
         cursor.add_subst(node)
+    elif match.group('expression') is not None:
+        raise NotImplementedError("expressions are not supported")
     elif match.group('expr_primary') is not None:
         node = _parse_expr_primary(cursor)
     elif match.group('template_arg_pack') is not None:
         node = _parse_until_end(cursor, 'tpl_arg_pack', _parse_type)
+    elif match.group('arg_pack_expansion') is not None:
+        node = _parse_type(cursor)
+        node = Node('expand_arg_pack', node)
     else:
         return None
     return node
@@ -690,6 +703,7 @@ class TestDemangler(unittest.TestCase):
 
     def test_argpack(self):
         self.assertDemangles('_Z1fILb0EJciEE', 'f<(bool)0, char, int>')
+        self.assertDemangles('_Z1fIJciEEvDpOT_', 'void f<char, int>(char, int)')
 
     def test_special(self):
         self.assertDemangles('_ZTV1f', 'vtable for f')
