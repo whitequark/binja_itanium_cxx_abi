@@ -1,3 +1,4 @@
+import re
 from binaryninja import log
 from binaryninja.plugin import PluginCommand, BackgroundTaskThread
 from binaryninja.binaryview import BinaryReader
@@ -181,13 +182,18 @@ def analyze_cxx_abi(view, start=None, length=None, task=None):
         is_code = (symbol.type in [SymbolType.FunctionSymbol,
                                    SymbolType.ImportedFunctionSymbol])
 
+        raw_name, suffix = symbol.raw_name, ''
+        if '@' in raw_name:
+            match = re.match(r'^(.+?)(@.+)$', raw_name)
+            raw_name, suffix = match.group(1), match.group(2)
+
         try:
-            name_ast = parse_mangled(symbol.raw_name)
+            name_ast = parse_mangled(raw_name)
             if name_ast is None:
-                log.log_warn("Demangler failed to recognize {}".format(symbol.raw_name))
+                log.log_warn("Demangler failed to recognize {}".format(raw_name))
                 demangler_failures += 1
         except NotImplementedError as e:
-            log.log_warn("Demangler feature missing on {}: {}".format(symbol.raw_name, str(e)))
+            log.log_warn("Demangler feature missing on {}: {}".format(raw_name, str(e)))
             demangler_failures += 1
 
         if name_ast:
@@ -196,7 +202,9 @@ def analyze_cxx_abi(view, start=None, length=None, task=None):
             else:
                 short_name = str(name_ast)
             symbol = Symbol(symbol.type, symbol.address,
-                short_name=short_name, full_name=str(name_ast), raw_name=symbol.raw_name)
+                short_name=short_name + suffix,
+                full_name=str(name_ast) + suffix,
+                raw_name=symbol.raw_name)
         else:
             symbol = Symbol(symbol.type, symbol.address,
                 short_name=symbol.raw_name, full_name=None, raw_name=symbol.raw_name)
