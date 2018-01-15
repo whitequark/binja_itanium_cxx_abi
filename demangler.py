@@ -212,12 +212,14 @@ class FuncNode(namedtuple('FuncNode', 'kind name arg_tys ret_ty')):
     def __str__(self):
         if self.kind == 'func':
             result = ""
-            if self.ret_ty:
+            if self.ret_ty is not None:
                 result += str(self.ret_ty) + ' '
+            if self.name is not None:
+                result += str(self.name)
             if self.arg_tys == (Node('builtin', 'void'),):
-                result += str(self.name) + '()'
+                result += '()'
             else:
-                result += str(self.name) + '(' + ', '.join(map(str, self.arg_tys)) + ')'
+                result += '(' + ', '.join(map(str, self.arg_tys)) + ')'
             return result
         else:
             return repr(self)
