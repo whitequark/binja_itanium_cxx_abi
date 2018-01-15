@@ -495,6 +495,7 @@ _TYPE_RE = re.compile(r"""
                         Dd|De|Df|Dh|DF|Di|Ds|Da|Dc|Dn) |
 (?P<qualified_type>     [rVK]+) |
 (?P<indirect_type>      [PRO]) |
+(?P<function_type>      F) |
 (?P<expression>         X) |
 (?P<expr_primary>       (?= L)) |
 (?P<template_arg_pack>  J) |
@@ -520,6 +521,18 @@ def _parse_type(cursor):
         if ty is None:
             return None
         node = _handle_indirect(match.group('indirect_type'), ty)
+        cursor.add_subst(node)
+    elif match.group('function_type') is not None:
+        ret_ty = _parse_type(cursor)
+        if ret_ty is None:
+            return None
+        arg_tys = []
+        while not cursor.accept('E'):
+            arg_ty = _parse_type(cursor)
+            if arg_ty is None:
+                return None
+            arg_tys.append(arg_ty)
+        node = FuncNode('func', None, tuple(arg_tys), ret_ty)
         cursor.add_subst(node)
     elif match.group('expression') is not None:
         raise NotImplementedError("expressions are not supported")
