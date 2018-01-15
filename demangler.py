@@ -491,7 +491,8 @@ _TYPE_RE = re.compile(r"""
 (?P<expression>         X) |
 (?P<expr_primary>       (?= L)) |
 (?P<template_arg_pack>  J) |
-(?P<arg_pack_expansion> Dp)
+(?P<arg_pack_expansion> Dp) |
+(?P<decltype>           D[tT])
 """, re.X)
 
 def _parse_type(cursor):
@@ -528,6 +529,8 @@ def _parse_type(cursor):
     elif match.group('arg_pack_expansion') is not None:
         node = _parse_type(cursor)
         node = Node('expand_arg_pack', node)
+    elif match.group('decltype') is not None:
+        raise NotImplementedError("decltype is not supported")
     else:
         return None
     return node
