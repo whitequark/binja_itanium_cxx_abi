@@ -6,7 +6,7 @@
     "type": ["analysis"],
     "api": "python2",
     "description": "A plugin providing an analysis for Itanium C++ ABI.",
-    "longdescription": "This plugin provides an analysis that decodes RTTI and vtables, and discovers new procedures based on virtual function pointers.",
+    "longdescription": "This plugin provides a custom demangler, an analysis that decodes mangled names and updates function signatures, and an analysis that decodes RTTI and vtables and discovers new procedures based on virtual function pointers.",
     "license": {
       "name": "BSD-0-clause"
     }
