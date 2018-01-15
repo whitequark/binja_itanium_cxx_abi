@@ -20,6 +20,7 @@ Name nodes:
 
 Type nodes:
     * `name` and `qual_name` specify a type by its name
+    * `builtin`: `node.value` (`str`) specifies a builtin type by its name
     * `pointer`, `lvalue` and `rvalue`: `node.value` holds a pointee type node
     * `cv_qual`: `node.value` holds a type node, `node.qual` (`set`) is any of
       `"const"`, `"volatile"`, or `"restrict"`
@@ -43,6 +44,7 @@ class _Cursor:
     def __init__(self, raw, pos=0):
         self._raw = raw
         self._pos = pos
+        self._substs = {}
 
     def at_end(self):
         return self._pos == len(self._raw)
@@ -73,6 +75,14 @@ class _Cursor:
             self._pos = match.end(0)
         return match
 
+    def add_subst(self, node):
+        print("S[{}] = {}".format(len(self._substs), str(node)))
+        self._substs[len(self._substs)] = node
+
+    def resolve_subst(self, seq_id):
+        if seq_id in self._substs:
+            return self._substs[seq_id]
+
     def __repr__(self):
         return "_Cursor({}, {})".format(self._raw[:self._pos] + '→' + self._raw[self._pos:],
                                         self._pos)
@@ -83,7 +93,7 @@ class Node(namedtuple('Node', 'kind value')):
         return "<Node {} {}>".format(self.kind, repr(self.value))
 
     def __str__(self):
-        if self.kind == 'name':
+        if self.kind in ('name', 'builtin'):
             return self.value
         elif self.kind == 'qual_name':
             result = ''
@@ -127,6 +137,8 @@ class Node(namedtuple('Node', 'kind value')):
             return str(self.value) + '&&'
         elif self.kind == 'tpl_param':
             return '{T' + str(self.value) + '}'
+        elif self.kind == 'subst':
+            return '{S' + str(self.value) + '}'
         elif self.kind == 'vtable':
             return 'vtable for ' + str(self.value)
         elif self.kind == 'vtt':
@@ -192,7 +204,7 @@ class FuncNode(namedtuple('FuncNode', 'kind name arg_tys ret_ty')):
             result = ""
             if self.ret_ty:
                 result += str(self.ret_ty) + ' '
-            if self.arg_tys == (Node('name', 'void'),):
+            if self.arg_tys == (Node('builtin', 'void'),):
                 result += str(self.name) + '()'
             else:
                 result += str(self.name) + '(' + ', '.join(map(str, self.arg_tys)) + ')'
@@ -328,6 +340,22 @@ def _handle_indirect(qualifier, node):
     return node
 
 
+def _parse_source_name(cursor, length):
+    name_len = int(length)
+    name = cursor.advance(name_len)
+    if name is None:
+        return None
+    return name
+
+def _parse_seq_id(cursor):
+    seq_id = cursor.advance_until('_')
+    if seq_id is None:
+        return None
+    if seq_id == '':
+        return 0
+    else:
+        return 1 + int(seq_id, 36)
+
 def _parse_until_end(cursor, kind, fn):
     nodes = []
     while not cursor.accept('E'):
@@ -336,13 +364,6 @@ def _parse_until_end(cursor, kind, fn):
             return None
         nodes.append(node)
     return Node(kind, tuple(nodes))
-
-def _parse_source_name(cursor, length):
-    name_len = int(length)
-    name = cursor.advance(name_len)
-    if name is None:
-        return None
-    return Node('name', name)
 
 
 _NAME_RE = re.compile(r"""
@@ -355,18 +376,20 @@ _NAME_RE = re.compile(r"""
                         lt|gt|le|ge|nt|aa|oo|pp|mm|cm|pm|pt|cl|ix|qu) |
 (?P<operator_cv>        cv) |
 (?P<std_prefix>         St) |
+(?P<substitution>       S) |
 (?P<nested_name>        N (?P<cv_qual> [rVK]*) (?P<ref_qual> [RO]?)) |
 (?P<template_args>      I)
 """, re.X)
 
-def _parse_name(cursor):
+def _parse_name(cursor, is_nested=False):
     match = cursor.match(_NAME_RE)
     if match is None:
         return None
     elif match.group('source_name') is not None:
-        node = _parse_source_name(cursor, match.group('source_name'))
-        if node is None:
+        name = _parse_source_name(cursor, match.group('source_name'))
+        if name is None:
             return None
+        node = Node('name', name)
     elif match.group('ctor_name') is not None:
         node = Node('ctor', _ctor_dtor_map[match.group('ctor_name')])
     elif match.group('dtor_name') is not None:
@@ -381,23 +404,34 @@ def _parse_name(cursor):
             return None
         node = Node('oper_cast', ty)
     elif match.group('std_prefix') is not None:
-        name = _parse_name(cursor)
+        name = _parse_name(cursor, is_nested=True)
         if name is None:
             return None
         if name.kind == 'qual_name':
             node = Node('qual_name', (Node('name', 'std'),) + name.value)
         else:
             node = Node('qual_name', (Node('name', 'std'), name))
+    elif match.group('substitution') is not None:
+        seq_id = _parse_seq_id(cursor)
+        if seq_id is None:
+            return None
+        node = cursor.resolve_subst(seq_id)
+        if node is None:
+            return None
     elif match.group('nested_name') is not None:
         nodes = []
-        while not cursor.accept('E'):
-            name = _parse_name(cursor)
+        while True:
+            name = _parse_name(cursor, is_nested=True)
             if name is None or cursor.at_end():
                 return None
             if name.kind == 'qual_name':
                 nodes += name.value
             else:
                 nodes.append(name)
+            if cursor.accept('E'):
+                break
+            else:
+                cursor.add_subst(Node('qual_name', tuple(nodes)))
         node = Node('qual_name', tuple(nodes))
         node = _handle_cv(match.group('cv_qual'), node)
         node = _handle_indirect(match.group('ref_qual'), node)
@@ -406,11 +440,18 @@ def _parse_name(cursor):
     if node is None:
         return None
 
-    if cursor.accept('I'):
+    if not is_nested and cursor.accept('I') and (
+            node.kind == 'name' or
+            match.group('std_prefix') is not None or
+            match.group('std_name') is not None):
+        if node.kind == 'name' or match.group('std_prefix') is not None:
+            cursor.add_subst(node) # <unscoped-template-name> ::= <substitution>
         templ_args = _parse_until_end(cursor, 'tpl_args', _parse_type)
         if templ_args is None:
             return None
         node = Node('qual_name', (node, templ_args))
+        if match.group('std_prefix') is not None or match.group('std_name') is not None:
+            cursor.add_subst(node)
 
     return node
 
@@ -421,6 +462,7 @@ _TYPE_RE = re.compile(r"""
 (?P<qualified_type>     [rVK]+) |
 (?P<template_param>     T) |
 (?P<indirect_type>      [PRO]) |
+(?P<substitution>       S (?= [0-9A-Z_])) |
 (?P<expr_primary>       (?= L))
 """, re.X)
 
@@ -429,27 +471,37 @@ def _parse_type(cursor):
     if match is None:
         return _parse_name(cursor)
     elif match.group('builtin_type') is not None:
-        return Node('name', _builtin_types[match.group('builtin_type')])
+        node = Node('builtin', _builtin_types[match.group('builtin_type')])
     elif match.group('qualified_type') is not None:
         ty = _parse_type(cursor)
         if ty is None:
             return None
-        return _handle_cv(match.group('qualified_type'), ty)
+        node = _handle_cv(match.group('qualified_type'), ty)
+        cursor.add_subst(node)
     elif match.group('template_param') is not None:
-        seq_id = cursor.advance_until('_')
+        seq_id = _parse_seq_id(cursor)
         if seq_id is None:
             return None
-        if seq_id == '':
-            return Node('tpl_param', 0)
-        else:
-            return Node('tpl_param', 1 + int(seq_id, 36))
+        node = Node('tpl_param', seq_id)
+        cursor.add_subst(node)
     elif match.group('indirect_type') is not None:
         ty = _parse_type(cursor)
         if ty is None:
             return None
-        return _handle_indirect(match.group('indirect_type'), ty)
+        node = _handle_indirect(match.group('indirect_type'), ty)
+        cursor.add_subst(node)
+    elif match.group('substitution') is not None:
+        seq_id = _parse_seq_id(cursor)
+        if seq_id is None:
+            return None
+        node = cursor.resolve_subst(seq_id)
+        if node is None:
+            return None
     elif match.group('expr_primary') is not None:
-        return _parse_expr_primary(cursor)
+        node = _parse_expr_primary(cursor)
+    else:
+        return None
+    return node
 
 
 _EXPR_PRIMARY_RE = re.compile(r"""
@@ -496,6 +548,18 @@ def _parse_special(cursor):
             return Node('typeinfo_name', name)
 
 
+def _expand_template_args(func):
+    if func.name.kind == 'qual_name':
+        name_suffix = func.name.value[-1]
+        if name_suffix.kind == 'tpl_args':
+            tpl_args = name_suffix.value
+            def mapper(node):
+                if node.kind == 'tpl_param' and node.value < len(tpl_args):
+                    return tpl_args[node.value]
+                return node.map(mapper)
+            return mapper(func)
+    return func
+
 _MANGLED_NAME_RE = re.compile(r"""
 (?P<mangled_name>       _Z)
 """, re.X)
@@ -530,28 +594,13 @@ def _parse_mangled_name(cursor):
             arg_tys.append(arg_ty)
 
         if arg_tys:
-            return FuncNode('func', name, tuple(arg_tys), ret_ty)
+            return _expand_template_args(FuncNode('func', name, tuple(arg_tys), ret_ty))
         else:
             return name
 
 
-def _expand_template_args(ast):
-    if ast.kind == 'func' and ast.name.kind == 'qual_name':
-        name_suffix = ast.name.value[-1]
-        if name_suffix.kind == 'tpl_args':
-            tpl_args = name_suffix.value
-            def mapper(node):
-                if node.kind == 'tpl_param' and node.value < len(tpl_args):
-                    return tpl_args[node.value]
-                return node.map(mapper)
-            return mapper(ast)
-    return ast
-
 def parse(raw):
-    ast = _parse_mangled_name(_Cursor(raw))
-    if ast:
-        ast = _expand_template_args(ast)
-    return ast
+    return _parse_mangled_name(_Cursor(raw))
 
 # ================================================================================================
 
@@ -593,6 +642,8 @@ class TestDemangler(unittest.TestCase):
         self.assertDemangles('_ZStN3fooE', 'std::foo')
         self.assertDemangles('_ZSs', 'std::string')
         self.assertDemangles('_ZSt', None)
+        self.assertDemangles('_Z3fooISt6vectorE', 'foo<std::vector>')
+        self.assertDemangles('_ZSaIhE', 'std::allocator<unsigned char>')
 
     def test_nested_name(self):
         self.assertDemangles('_ZN3fooE', 'foo')
@@ -619,10 +670,6 @@ class TestDemangler(unittest.TestCase):
         self.assertDemangles('_Z1fIViE', 'f<int volatile>')
         self.assertDemangles('_Z1fIVVViE', 'f<int volatile>')
 
-    def test_template_param(self):
-        self.assertDemangles('_ZN1fIciEEvT_PT0_', 'void f<char, int>(char, int*)')
-        self.assertDemangles('_ZN1fIciEEvT_PT0', None)
-
     def test_function_type(self):
         self.assertDemangles('_Z1fv', 'f()')
         self.assertDemangles('_Z1fi', 'f(int)')
@@ -648,9 +695,32 @@ class TestDemangler(unittest.TestCase):
         self.assertDemangles('_ZTI1f', 'typeinfo for f')
         self.assertDemangles('_ZTS1f', 'typeinfo name for f')
 
+    def test_template_param(self):
+        self.assertDemangles('_ZN1fIciEEvT_PT0_', 'void f<char, int>(char, int*)')
+        self.assertDemangles('_ZN1fIciEEvT_PT0', None)
+
+    def test_substitution(self):
+        self.assertDemangles('_Z3fooIEvS_', 'void foo<>(foo)')
+        self.assertDemangles('_ZN3foo3barIES_E', 'foo::bar<>::foo')
+        self.assertDemangles('_ZN3foo3barIES0_E', 'foo::bar<>::foo::bar')
+        self.assertDemangles('_ZN3foo3barIES1_E', 'foo::bar<>::foo::bar<>')
+        self.assertDemangles('_ZN3foo3barIES_ES2_', None)
+        self.assertDemangles('_Z3fooIS_E', 'foo<foo>')
+        self.assertDemangles('_ZSt3fooIS_E', 'std::foo<std::foo>')
+        self.assertDemangles('_Z3fooIPiEvS0_', 'void foo<int*>(int*)')
+        self.assertDemangles('_Z3fooISaIcEEvS0_', 'void foo<std::allocator<char>>(std::allocator<char>)')
+
 
 if __name__ == '__main__':
     import sys
-    ast = parse(sys.argv[1])
-    print(repr(ast))
-    print(ast)
+    if len(sys.argv) == 1:
+        while True:
+            name = sys.stdin.readline()
+            if not name:
+                break
+            print(parse(name.strip()))
+    else:
+        for name in sys.argv[1:]:
+            ast = parse(name)
+            print(repr(ast))
+            print(ast)
