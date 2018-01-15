@@ -80,7 +80,8 @@ class _Cursor:
 
     def add_subst(self, node):
         # print("S[{}] = {}".format(len(self._substs), str(node)))
-        self._substs[len(self._substs)] = node
+        if not node in self._substs.values():
+            self._substs[len(self._substs)] = node
 
     def resolve_subst(self, seq_id):
         if seq_id in self._substs:
@@ -747,6 +748,8 @@ class TestDemangler(unittest.TestCase):
         self.assertDemangles('_Z3fooISaIcEEvS0_',
                              'void foo<std::allocator<char>>(std::allocator<char>)')
         self.assertDemangles('_Z3fooI3barS0_E', 'foo<bar, bar>')
+        self.assertDemangles('_ZN2n11fEPNS_1bEPNS_2n21cEPNS2_2n31dE',
+                             'n1::f(n1::b*, n1::n2::c*, n1::n2::n3::d*)')
 
     def test_abi_tag(self):
         self.assertDemangles('_Z3fooB5cxx11v', 'foo[abi:cxx11]()')
