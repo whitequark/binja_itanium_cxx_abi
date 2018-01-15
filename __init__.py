@@ -2,13 +2,14 @@ from binaryninja import log
 from binaryninja.plugin import PluginCommand, BackgroundTaskThread
 from binaryninja.binaryview import BinaryReader
 from binaryninja.types import Symbol, Type, Structure, NamedTypeReference
-from binaryninja.enums import SymbolType
+from binaryninja.enums import SymbolType, ReferenceType
 
-from .demangler import parse as parse_mangled
+from .demangler import Node, parse as parse_mangled
 
 
 def analyze_cxx_abi(view, start=None, length=None, task=None):
-    arch = view.arch
+    platform = view.platform
+    arch = platform.arch
 
     void_p_ty = Type.pointer(arch, Type.void())
     char_p_ty = Type.pointer(arch, Type.int(1))
@@ -35,6 +36,122 @@ def analyze_cxx_abi(view, start=None, length=None, task=None):
         vtable_struct.append(base_type_info_ptr_ty, 'typeinfo')
         vtable_struct.append(Type.array(void_p_ty, vfunc_count), 'functions')
         return Type.structure_type(vtable_struct)
+
+    if platform.name.startswith("windows-"):
+        long_size = arch.default_int_size
+    else:
+        long_size = arch.address_size
+
+    if arch.name.startswith('x86'):
+        char_signed = True
+    else:
+        char_signed = False # not always true
+
+    short_size = 2 # not always true
+    long_long_size = 8 # not always true
+
+    ty_for_cxx_builtin = {
+        'void':                 Type.void(),
+        'wchar_t':              Type.int(2, sign=char_signed, altname='wchar_t'),
+        'bool':                 Type.bool(),
+        'char':                 Type.int(1, sign=char_signed),
+        'signed char':          Type.int(1, sign=True),
+        'unsigned char':        Type.int(1, sign=False),
+        'short':                Type.int(short_size, sign=True),
+        'unsigned short':       Type.int(short_size, sign=False),
+        'int':                  Type.int(arch.default_int_size, sign=True),
+        'unsigned int':         Type.int(arch.default_int_size, sign=False),
+        'long':                 Type.int(long_size, sign=True),
+        'unsigned long':        Type.int(long_size, sign=False),
+        'long long':            Type.int(long_long_size, sign=True),
+        'unsigned long long':   Type.int(long_long_size, sign=False),
+        '__int128':             Type.int(16, sign=True),
+        'unsigned __int128':    Type.int(16, sign=False),
+        # https://github.com/Vector35/binaryninja-api/issues/912
+        # 'float':                Type.float(4),
+        # 'double':               Type.float(8),
+        # '__float80':            Type.float(10),
+        # '__float128':           Type.float(16),
+        'char32_t':             Type.int(4, sign=char_signed, altname='char32_t'),
+        'char16_t':             Type.int(2, sign=char_signed, altname='char16_t'),
+    }
+
+    def ty_from_demangler_node(node, cv_qual=frozenset(), arg_count_hint=None):
+        if node.kind == 'builtin':
+            if node.value in ty_for_cxx_builtin:
+                return ty_for_cxx_builtin[node.value]
+            else:
+                return None
+        elif node.kind in ['name', 'qual_name']:
+            named_ty_ref = NamedTypeReference(name=str(node))
+            return Type.named_type(named_ty_ref)
+        elif node.kind in ['pointer', 'lvalue', 'rvalue']:
+            pointee_ty = ty_from_demangler_node(node.value)
+            if pointee_ty is None:
+                return None
+            is_const = ('const' in cv_qual)
+            is_volatile = ('volatile' in cv_qual)
+            if node.kind == 'pointer':
+                return Type.pointer(arch, pointee_ty, is_const, is_volatile)
+            elif node.kind == 'lvalue':
+                return Type.pointer(arch, pointee_ty, is_const, is_volatile,
+                                    ref_type=ReferenceType.ReferenceReferenceType)
+            elif node.kind == 'rvalue':
+                return Type.pointer(arch, pointee_ty, is_const, is_volatile,
+                                    ref_type=ReferenceType.RValueReferenceType)
+        elif node.kind == 'cv_qual':
+            return ty_from_demangler_node(node.value, cv_qual=node.qual)
+        elif node.kind == 'func':
+            is_ctor_dtor = False
+            if node.name.kind == 'qual_name' and node.name.value[-1].kind in ['ctor', 'dtor']:
+                is_ctor_dtor = True
+
+            if is_ctor_dtor:
+                ret_ty = Type.void()
+            elif node.ret_ty is not None:
+                ret_ty = ty_from_demangler_node(node.ret_ty)
+                if ret_ty is None:
+                    return None
+            else:
+                ret_ty = Type.int(arch.default_int_size).with_confidence(0)
+
+            arg_nodes = list(node.arg_tys)
+            arg_tys = []
+
+            var_arg = False
+            if arg_nodes[-1].kind == 'builtin' and arg_nodes[-1].value == '...':
+                arg_nodes.pop()
+                var_arg = True
+
+            if arg_nodes[0].kind == 'builtin' and arg_nodes[0].value == 'void':
+                arg_nodes = arg_nodes[1:]
+
+            this_arg = False
+            if node.name.kind == 'qual_name':
+                if is_ctor_dtor or (arg_count_hint is not None and
+                                    len(arg_nodes) == arg_count_hint - 1):
+                    this_arg = True
+                    this_node = Node('qual_name', node.name.value[:-1])
+                    this_ty = ty_from_demangler_node(this_node)
+                    if this_ty is None:
+                        return None
+                    arg_tys.append(Type.pointer(arch, this_ty))
+
+            for arg_node in arg_nodes:
+                arg_ty = ty_from_demangler_node(arg_node)
+                if arg_ty is None:
+                    return None
+                arg_tys.append(arg_ty)
+
+            ty = Type.function(ret_ty, arg_tys, variable_arguments=var_arg)
+            if arg_count_hint is not None:
+                # toplevel invocation, so return whether we inferred a this argument
+                return this_arg, ty
+            else:
+                return ty
+        else:
+            log.log_warn("Cannot convert demangled AST {} to a type"
+                         .format(repr(node)))
 
     reader = BinaryReader(view)
     def read(size):
@@ -165,6 +282,14 @@ def analyze_cxx_abi(view, start=None, length=None, task=None):
                         continue
 
                 break
+
+        elif is_code and name_ast.kind == 'func':
+            func = view.get_function_at(symbol.address)
+            demangled = ty_from_demangler_node(name_ast,
+                                               arg_count_hint=len(func.function_type.parameters))
+            if demangled is not None:
+                this_arg, ty = demangled
+                func.apply_auto_discovered_type(ty)
 
     view.update_analysis()
 
