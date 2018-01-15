@@ -394,7 +394,8 @@ _NAME_RE = re.compile(r"""
 (?P<std_prefix>         St) |
 (?P<substitution>       S) |
 (?P<nested_name>        N (?P<cv_qual> [rVK]*) (?P<ref_qual> [RO]?)) |
-(?P<template_args>      I)
+(?P<template_args>      I) |
+(?P<constant>           L)
 """, re.X)
 
 def _parse_name(cursor, is_nested=False):
@@ -453,6 +454,9 @@ def _parse_name(cursor, is_nested=False):
         node = _handle_indirect(match.group('ref_qual'), node)
     elif match.group('template_args') is not None:
         node = _parse_until_end(cursor, 'tpl_args', _parse_type)
+    elif match.group('constant') is not None:
+        # not in the ABI doc, but probably means `const`
+        return _parse_name(cursor, is_nested)
     if node is None:
         return None
 
@@ -743,6 +747,10 @@ class TestDemangler(unittest.TestCase):
 
     def test_abi_tag(self):
         self.assertDemangles('_Z3fooB5cxx11v', 'foo[abi:cxx11]()')
+
+    def test_const(self):
+        self.assertDemangles('_ZL3foo', 'foo')
+
 
 if __name__ == '__main__':
     import sys
