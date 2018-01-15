@@ -473,7 +473,8 @@ _TYPE_RE = re.compile(r"""
 def _parse_type(cursor):
     match = cursor.match(_TYPE_RE)
     if match is None:
-        return _parse_name(cursor)
+        node = _parse_name(cursor)
+        cursor.add_subst(node)
     elif match.group('builtin_type') is not None:
         node = Node('builtin', _builtin_types[match.group('builtin_type')])
     elif match.group('qualified_type') is not None:
@@ -719,6 +720,7 @@ class TestDemangler(unittest.TestCase):
         self.assertDemangles('_Z3fooIPiEvS0_', 'void foo<int*>(int*)')
         self.assertDemangles('_Z3fooISaIcEEvS0_',
                              'void foo<std::allocator<char>>(std::allocator<char>)')
+        self.assertDemangles('_Z3fooI3barS0_E', 'foo<bar, bar>')
 
 
 if __name__ == '__main__':
