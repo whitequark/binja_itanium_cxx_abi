@@ -26,6 +26,7 @@ Type nodes:
       `"const"`, `"volatile"`, or `"restrict"`
     * `literal`: `node.value` (`str`) holds the literal representation as-is,
       `node.ty` holds a type node specifying the type of the literal
+    * `tpl_arg_pack`: `node.value` (`tuple`) holds a sequence of type nodes
     * `function`: `node.name` holds a name node specifying the function name,
       `node.ret_ty` holds a type node specifying the return type of a template function,
       if any, or `None`, ``node.arg_tys` (`tuple`) holds a sequence of type nodes
@@ -76,7 +77,7 @@ class _Cursor:
         return match
 
     def add_subst(self, node):
-        print("S[{}] = {}".format(len(self._substs), str(node)))
+        # print("S[{}] = {}".format(len(self._substs), str(node)))
         self._substs[len(self._substs)] = node
 
     def resolve_subst(self, seq_id):
@@ -104,6 +105,8 @@ class Node(namedtuple('Node', 'kind value')):
             return result
         elif self.kind == 'tpl_args':
             return '<' + ', '.join(map(str, self.value)) + '>'
+        elif self.kind == 'tpl_arg_pack':
+            return ', '.join(map(str, self.value))
         elif self.kind == 'ctor':
             if self.value == 'complete':
                 return '{ctor}'
@@ -463,7 +466,8 @@ _TYPE_RE = re.compile(r"""
 (?P<template_param>     T) |
 (?P<indirect_type>      [PRO]) |
 (?P<substitution>       S (?= [0-9A-Z_])) |
-(?P<expr_primary>       (?= L))
+(?P<expr_primary>       (?= L)) |
+(?P<template_arg_pack>  J)
 """, re.X)
 
 def _parse_type(cursor):
@@ -499,6 +503,8 @@ def _parse_type(cursor):
             return None
     elif match.group('expr_primary') is not None:
         node = _parse_expr_primary(cursor)
+    elif match.group('template_arg_pack') is not None:
+        node = _parse_until_end(cursor, 'tpl_arg_pack', _parse_type)
     else:
         return None
     return node
@@ -689,6 +695,9 @@ class TestDemangler(unittest.TestCase):
         self.assertDemangles('_Z1fILi1EE', 'f<(int)1>')
         self.assertDemangles('_Z1fIL_Z1gEE', 'f<g>')
 
+    def test_argpack(self):
+        self.assertDemangles('_Z1fILb0EJciEE', 'f<(bool)0, char, int>')
+
     def test_special(self):
         self.assertDemangles('_ZTV1f', 'vtable for f')
         self.assertDemangles('_ZTT1f', 'vtt for f')
@@ -708,7 +717,8 @@ class TestDemangler(unittest.TestCase):
         self.assertDemangles('_Z3fooIS_E', 'foo<foo>')
         self.assertDemangles('_ZSt3fooIS_E', 'std::foo<std::foo>')
         self.assertDemangles('_Z3fooIPiEvS0_', 'void foo<int*>(int*)')
-        self.assertDemangles('_Z3fooISaIcEEvS0_', 'void foo<std::allocator<char>>(std::allocator<char>)')
+        self.assertDemangles('_Z3fooISaIcEEvS0_',
+                             'void foo<std::allocator<char>>(std::allocator<char>)')
 
 
 if __name__ == '__main__':
