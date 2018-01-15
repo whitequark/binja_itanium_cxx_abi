@@ -476,14 +476,16 @@ def _parse_name(cursor, is_nested=False):
     if not is_nested and cursor.accept('I') and (
             node.kind == 'name' or
             match.group('std_prefix') is not None or
-            match.group('std_name') is not None):
+            match.group('std_name') is not None or
+            match.group('substitution') is not None):
         if node.kind == 'name' or match.group('std_prefix') is not None:
             cursor.add_subst(node) # <unscoped-template-name> ::= <substitution>
         templ_args = _parse_until_end(cursor, 'tpl_args', _parse_type)
         if templ_args is None:
             return None
         node = Node('qual_name', (node, templ_args))
-        if match.group('std_prefix') is not None or match.group('std_name') is not None:
+        if (match.group('std_prefix') is not None or
+                match.group('std_name') is not None):
             cursor.add_subst(node)
 
     return node
@@ -818,6 +820,7 @@ class TestDemangler(unittest.TestCase):
         self.assertDemangles('_Z3fooI3barS0_E', 'foo<bar, bar>')
         self.assertDemangles('_ZN2n11fEPNS_1bEPNS_2n21cEPNS2_2n31dE',
                              'n1::f(n1::b*, n1::n2::c*, n1::n2::n3::d*)')
+        self.assertDemangles('_ZN1f1gES_IFvvEE', 'f::g(f<void ()>)')
 
     def test_abi_tag(self):
         self.assertDemangles('_Z3fooB5cxx11v', 'foo[abi:cxx11]()')
