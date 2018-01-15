@@ -35,6 +35,8 @@ Type nodes:
 Special nodes:
     * `vtable`, `vtt`, `typeinfo`, and `typeinfo_name`: `node.value` holds a type node
       specifying the type described by this RTTI data structure
+    * `nonvirt_thunk`, `virt_thunk`: `node.value` holds a function node specifying
+      the function to which the thunk dispatches
 """
 
 import re
@@ -149,6 +151,10 @@ class Node(namedtuple('Node', 'kind value')):
             return 'typeinfo for ' + str(self.value)
         elif self.kind == 'typeinfo_name':
             return 'typeinfo name for ' + str(self.value)
+        elif self.kind == 'nonvirt_thunk':
+            return 'non-virtual thunk for ' + str(self.value)
+        elif self.kind == 'virt_thunk':
+            return 'virtual thunk for ' + str(self.value)
         else:
             return repr(self)
 
@@ -563,28 +569,6 @@ def _parse_expr_primary(cursor):
         return CastNode('literal', value, ty)
 
 
-_SPECIAL_RE = re.compile(r"""
-(?P<special>            T (?P<kind> [VTIS]))
-""", re.X)
-
-def _parse_special(cursor):
-    match = cursor.match(_SPECIAL_RE)
-    if match is None:
-        return None
-    elif match.group('special') is not None:
-        name = _parse_type(cursor)
-        if name is None:
-            return None
-        if match.group('kind') == 'V':
-            return Node('vtable', name)
-        elif match.group('kind') == 'T' is not None:
-            return Node('vtt', name)
-        elif match.group('kind') == 'I' is not None:
-            return Node('typeinfo', name)
-        elif match.group('kind') == 'S' is not None:
-            return Node('typeinfo_name', name)
-
-
 def _expand_template_args(func):
     if func.name.kind == 'qual_name':
         name_suffix = func.name.value[-1]
@@ -596,6 +580,71 @@ def _expand_template_args(func):
                 return node.map(mapper)
             return mapper(func)
     return func
+
+def _parse_encoding(cursor):
+    name = _parse_name(cursor)
+    if name is None:
+        return None
+    if cursor.at_end():
+        return name
+
+    if name.kind == 'qual_name' and name.value[-1].kind == 'tpl_args':
+        ret_ty = _parse_type(cursor)
+        if ret_ty is None:
+            return None
+    else:
+        ret_ty = None
+
+    arg_tys = []
+    while not cursor.at_end():
+        arg_ty = _parse_type(cursor)
+        if arg_ty is None:
+            return None
+        arg_tys.append(arg_ty)
+
+    if arg_tys:
+        func = FuncNode('func', name, tuple(arg_tys), ret_ty)
+        return _expand_template_args(func)
+    else:
+        return name
+
+
+_SPECIAL_RE = re.compile(r"""
+(?P<rtti>               T (?P<kind> [VTIS])) |
+(?P<nonvirtual_thunk>   Th (?P<nv_offset> n? \d+) _) |
+(?P<virtual_thunk>      Tv (?P<v_offset> n? \d+) _ (?P<vcall_offset> n? \d+) _) |
+(?P<covariant_thunk>    Tc)
+""", re.X)
+
+def _parse_special(cursor):
+    match = cursor.match(_SPECIAL_RE)
+    if match is None:
+        return None
+    elif match.group('rtti') is not None:
+        name = _parse_type(cursor)
+        if name is None:
+            return None
+        if match.group('kind') == 'V':
+            return Node('vtable', name)
+        elif match.group('kind') == 'T' is not None:
+            return Node('vtt', name)
+        elif match.group('kind') == 'I' is not None:
+            return Node('typeinfo', name)
+        elif match.group('kind') == 'S' is not None:
+            return Node('typeinfo_name', name)
+    elif match.group('nonvirtual_thunk') is not None:
+        func = _parse_encoding(cursor)
+        if func is None:
+            return None
+        return Node('nonvirt_thunk', func)
+    elif match.group('virtual_thunk') is not None:
+        func = _parse_encoding(cursor)
+        if func is None:
+            return None
+        return Node('virt_thunk', func)
+    elif match.group('covariant_thunk') is not None:
+        raise NotImplementedError("covariant thunks are not supported")
+
 
 _MANGLED_NAME_RE = re.compile(r"""
 (?P<mangled_name>       _Z)
@@ -610,30 +659,7 @@ def _parse_mangled_name(cursor):
         if special is not None:
             return special
 
-        name = _parse_name(cursor)
-        if name is None:
-            return None
-        if cursor.at_end():
-            return name
-
-        if name.kind == 'qual_name' and name.value[-1].kind == 'tpl_args':
-            ret_ty = _parse_type(cursor)
-            if ret_ty is None:
-                return None
-        else:
-            ret_ty = None
-
-        arg_tys = []
-        while not cursor.at_end():
-            arg_ty = _parse_type(cursor)
-            if arg_ty is None:
-                return None
-            arg_tys.append(arg_ty)
-
-        if arg_tys:
-            return _expand_template_args(FuncNode('func', name, tuple(arg_tys), ret_ty))
-        else:
-            return name
+        return _parse_encoding(cursor)
 
 
 def _expand_arg_packs(ast):
@@ -769,6 +795,8 @@ class TestDemangler(unittest.TestCase):
         self.assertDemangles('_ZTT1f', 'vtt for f')
         self.assertDemangles('_ZTI1f', 'typeinfo for f')
         self.assertDemangles('_ZTS1f', 'typeinfo name for f')
+        self.assertDemangles('_ZThn16_1fv', 'non-virtual thunk for f()')
+        self.assertDemangles('_ZTv16_8_1fv', 'virtual thunk for f()')
 
     def test_template_param(self):
         self.assertDemangles('_ZN1fIciEEvT_PT0_', 'void f<char, int>(char, int*)')
