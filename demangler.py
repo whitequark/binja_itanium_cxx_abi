@@ -27,8 +27,6 @@ Type nodes:
       `"const"`, `"volatile"`, or `"restrict"`
     * `literal`: `node.value` (`str`) holds the literal representation as-is,
       `node.ty` holds a type node specifying the type of the literal
-    * `tpl_arg_pack`: `node.value` (`tuple`) holds a sequence of type nodes
-    * `expand_arg_pack`: `node.value` holds an argument pack node
     * `function`: `node.name` holds a name node specifying the function name,
       `node.ret_ty` holds a type node specifying the return type of a template function,
       if any, or `None`, ``node.arg_tys` (`tuple`) holds a sequence of type nodes
@@ -108,13 +106,6 @@ class Node(namedtuple('Node', 'kind value')):
             return result
         elif self.kind == 'tpl_args':
             return '<' + ', '.join(map(str, self.value)) + '>'
-        elif self.kind == 'tpl_arg_pack':
-            return ', '.join(map(str, self.value))
-        elif self.kind == 'expand_arg_pack':
-            if self.value.kind == 'rvalue' and self.value.value.kind == 'tpl_arg_pack':
-                return str(self.value.value)
-            else:
-                return '{expand ' + str(self.value) + '}'
         elif self.kind == 'ctor':
             if self.value == 'complete':
                 return '{ctor}'
@@ -159,7 +150,7 @@ class Node(namedtuple('Node', 'kind value')):
         elif self.kind == 'typeinfo_name':
             return 'typeinfo name for ' + str(self.value)
         else:
-            assert False
+            return repr(self)
 
     def map(self, f):
         if self.kind in ('oper_cast', 'pointer', 'lvalue', 'rvalue', 'expand_arg_pack',
@@ -181,7 +172,7 @@ class QualNode(namedtuple('QualNode', 'kind value qual')):
         elif self.kind == 'cv_qual':
             return ' '.join([str(self.value)] + list(self.qual))
         else:
-            assert False
+            return repr(self)
 
     def map(self, f):
         if self.kind == 'cv_qual':
@@ -198,7 +189,7 @@ class CastNode(namedtuple('CastNode', 'kind value ty')):
         if self.kind == 'literal':
             return '(' + str(self.ty) + ')' + str(self.value)
         else:
-            assert False
+            return repr(self)
 
     def map(self, f):
         if self.kind == 'literal':
@@ -223,7 +214,7 @@ class FuncNode(namedtuple('FuncNode', 'kind name arg_tys ret_ty')):
                 result += str(self.name) + '(' + ', '.join(map(str, self.arg_tys)) + ')'
             return result
         else:
-            assert False
+            return repr(self)
 
     def map(self, f):
         if self.kind == 'func':
@@ -645,8 +636,36 @@ def _parse_mangled_name(cursor):
             return name
 
 
+def _expand_arg_packs(ast):
+    def mapper(node):
+        if node.kind == 'tpl_args':
+            exp_args = []
+            for arg in node.value:
+                if arg.kind in ['tpl_arg_pack', 'tpl_args']:
+                    exp_args += arg.value
+                else:
+                    exp_args.append(arg)
+            return Node('tpl_args', tuple(map(mapper, exp_args)))
+        elif node.kind == 'func':
+            node = node.map(mapper)
+            exp_arg_tys = []
+            for arg_ty in node.arg_tys:
+                if arg_ty.kind == 'expand_arg_pack' and \
+                        arg_ty.value.kind == 'rvalue' and \
+                            arg_ty.value.value.kind in ['tpl_arg_pack', 'tpl_args']:
+                    exp_arg_tys += arg_ty.value.value.value
+                else:
+                    exp_arg_tys.append(arg_ty)
+            return node._replace(arg_tys=tuple(exp_arg_tys))
+        else:
+            return node.map(mapper)
+    return mapper(ast)
+
 def parse(raw):
-    return _parse_mangled_name(_Cursor(raw))
+    ast = _parse_mangled_name(_Cursor(raw))
+    if ast is not None:
+        ast = _expand_arg_packs(ast)
+    return ast
 
 # ================================================================================================
 
@@ -654,6 +673,10 @@ import unittest
 
 
 class TestDemangler(unittest.TestCase):
+    def assertParses(self, mangled, ast):
+        result = parse(mangled)
+        self.assertEqual(result, ast)
+
     def assertDemangles(self, mangled, demangled):
         result = parse(mangled)
         if result is not None:
@@ -687,7 +710,7 @@ class TestDemangler(unittest.TestCase):
         self.assertDemangles('_ZSt3foo', 'std::foo')
         self.assertDemangles('_ZStN3fooE', 'std::foo')
         self.assertDemangles('_ZSs', 'std::string')
-        self.assertDemangles('_ZSt', None)
+        self.assertParses('_ZSt', None)
         self.assertDemangles('_Z3fooISt6vectorE', 'foo<std::vector>')
         self.assertDemangles('_ZSaIhE', 'std::allocator<unsigned char>')
 
@@ -699,12 +722,12 @@ class TestDemangler(unittest.TestCase):
         self.assertDemangles('_ZNV3fooE', 'foo volatile')
         self.assertDemangles('_ZNKR3fooE', 'foo const&')
         self.assertDemangles('_ZNKO3fooE', 'foo const&&')
-        self.assertDemangles('_ZNKO3foo', None)
+        self.assertParses('_ZNKO3foo', None)
 
     def test_template_args(self):
         self.assertDemangles('_Z3fooIcE', 'foo<char>')
         self.assertDemangles('_ZN3fooIcEE', 'foo<char>')
-        self.assertDemangles('_Z3fooI', None)
+        self.assertParses('_Z3fooI', None)
 
     def test_builtin_types(self):
         for ty in _builtin_types:
@@ -737,7 +760,9 @@ class TestDemangler(unittest.TestCase):
 
     def test_argpack(self):
         self.assertDemangles('_Z1fILb0EJciEE', 'f<(bool)0, char, int>')
+        self.assertDemangles('_Z1fILb0EIciEE', 'f<(bool)0, char, int>')
         self.assertDemangles('_Z1fIJciEEvDpOT_', 'void f<char, int>(char, int)')
+        self.assertDemangles('_Z1fIIciEEvDpOT_', 'void f<char, int>(char, int)')
 
     def test_special(self):
         self.assertDemangles('_ZTV1f', 'vtable for f')
@@ -747,14 +772,14 @@ class TestDemangler(unittest.TestCase):
 
     def test_template_param(self):
         self.assertDemangles('_ZN1fIciEEvT_PT0_', 'void f<char, int>(char, int*)')
-        self.assertDemangles('_ZN1fIciEEvT_PT0', None)
+        self.assertParses('_ZN1fIciEEvT_PT0', None)
 
     def test_substitution(self):
         self.assertDemangles('_Z3fooIEvS_', 'void foo<>(foo)')
         self.assertDemangles('_ZN3foo3barIES_E', 'foo::bar<>::foo')
         self.assertDemangles('_ZN3foo3barIES0_E', 'foo::bar<>::foo::bar')
         self.assertDemangles('_ZN3foo3barIES1_E', 'foo::bar<>::foo::bar<>')
-        self.assertDemangles('_ZN3foo3barIES_ES2_', None)
+        self.assertParses('_ZN3foo3barIES_ES2_', None)
         self.assertDemangles('_Z3fooIS_E', 'foo<foo>')
         self.assertDemangles('_ZSt3fooIS_E', 'std::foo<std::foo>')
         self.assertDemangles('_Z3fooIPiEvS0_', 'void foo<int*>(int*)')
