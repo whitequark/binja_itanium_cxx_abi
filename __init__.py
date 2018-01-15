@@ -165,14 +165,12 @@ def analyze_cxx_abi(view, start=None, length=None, task=None):
         else:
             assert False
 
-    data_symbols = view.get_symbols_of_type(SymbolType.DataSymbol, start, length)
-    function_symbols = view.get_symbols_of_type(SymbolType.FunctionSymbol, start, length)
+    symbols = view.get_symbols(start, length)
+    if task:
+        task.set_total(len(symbols))
 
     demangler_failures = 0
-    if task:
-        task.set_total(len(data_symbols) + len(function_symbols))
-
-    for symbol in data_symbols + function_symbols:
+    for symbol in symbols:
         if task and not task.advance():
             break
 
@@ -180,7 +178,8 @@ def analyze_cxx_abi(view, start=None, length=None, task=None):
             continue
 
         is_data = (symbol.type == SymbolType.DataSymbol)
-        is_code = (symbol.type == SymbolType.FunctionSymbol)
+        is_code = (symbol.type in [SymbolType.FunctionSymbol,
+                                   SymbolType.ImportedFunctionSymbol])
 
         try:
             name_ast = parse_mangled(symbol.raw_name)
