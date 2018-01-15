@@ -103,8 +103,10 @@ def analyze_cxx_abi(view, start=None, length=None, task=None):
             return ty_from_demangler_node(node.value, cv_qual=node.qual)
         elif node.kind == 'func':
             is_ctor_dtor = False
-            if node.name.kind == 'qual_name' and node.name.value[-1].kind in ['ctor', 'dtor']:
-                is_ctor_dtor = True
+            if node.name and node.name.kind == 'qual_name':
+                qual_name = node.name.value
+                if qual_name[-1].kind in ['ctor', 'dtor']:
+                    is_ctor_dtor = True
 
             if is_ctor_dtor:
                 ret_ty = Type.void()
@@ -127,11 +129,12 @@ def analyze_cxx_abi(view, start=None, length=None, task=None):
                 arg_nodes = arg_nodes[1:]
 
             this_arg = False
-            if node.name.kind == 'qual_name':
+            if node.name and node.name.kind == 'qual_name':
+                qual_name = node.name.value
                 if is_ctor_dtor or (arg_count_hint is not None and
                                     len(arg_nodes) == arg_count_hint - 1):
                     this_arg = True
-                    this_node = Node('qual_name', node.name.value[:-1])
+                    this_node = Node('qual_name', qual_name[:-1])
                     this_ty = ty_from_demangler_node(this_node)
                     if this_ty is None:
                         return None

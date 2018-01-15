@@ -227,7 +227,7 @@ class FuncNode(namedtuple('FuncNode', 'kind name arg_tys ret_ty')):
 
     def map(self, f):
         if self.kind == 'func':
-            return self._replace(name=f(self.name),
+            return self._replace(name=f(self.name) if self.name else None,
                                  arg_tys=tuple(map(f, self.arg_tys)),
                                  ret_ty=f(self.ret_ty) if self.ret_ty else None)
         else:
