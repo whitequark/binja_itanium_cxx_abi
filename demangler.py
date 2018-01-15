@@ -395,6 +395,7 @@ _NAME_RE = re.compile(r"""
 (?P<std_prefix>         St) |
 (?P<substitution>       S) |
 (?P<nested_name>        N (?P<cv_qual> [rVK]*) (?P<ref_qual> [RO]?)) |
+(?P<template_param>     T) |
 (?P<template_args>      I) |
 (?P<constant>           L)
 """, re.X)
@@ -453,6 +454,12 @@ def _parse_name(cursor, is_nested=False):
         node = Node('qual_name', tuple(nodes))
         node = _handle_cv(match.group('cv_qual'), node)
         node = _handle_indirect(match.group('ref_qual'), node)
+    elif match.group('template_param') is not None:
+        seq_id = _parse_seq_id(cursor)
+        if seq_id is None:
+            return None
+        node = Node('tpl_param', seq_id)
+        cursor.add_subst(node)
     elif match.group('template_args') is not None:
         node = _parse_until_end(cursor, 'tpl_args', _parse_type)
     elif match.group('constant') is not None:
@@ -487,7 +494,6 @@ _TYPE_RE = re.compile(r"""
 (?P<builtin_type>       v|w|b|c|a|h|s|t|i|j|l|m|x|y|n|o|f|d|e|g|z|
                         Dd|De|Df|Dh|DF|Di|Ds|Da|Dc|Dn) |
 (?P<qualified_type>     [rVK]+) |
-(?P<template_param>     T) |
 (?P<indirect_type>      [PRO]) |
 (?P<expression>         X) |
 (?P<expr_primary>       (?= L)) |
@@ -508,12 +514,6 @@ def _parse_type(cursor):
         if ty is None:
             return None
         node = _handle_cv(match.group('qualified_type'), ty)
-        cursor.add_subst(node)
-    elif match.group('template_param') is not None:
-        seq_id = _parse_seq_id(cursor)
-        if seq_id is None:
-            return None
-        node = Node('tpl_param', seq_id)
         cursor.add_subst(node)
     elif match.group('indirect_type') is not None:
         ty = _parse_type(cursor)
