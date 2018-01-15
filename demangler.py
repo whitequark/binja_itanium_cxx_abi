@@ -77,7 +77,7 @@ class _Cursor:
         return match
 
     def add_subst(self, node):
-        # print("S[{}] = {}".format(len(self._substs), str(node)))
+        print("S[{}] = {}".format(len(self._substs), str(node)))
         self._substs[len(self._substs)] = node
 
     def resolve_subst(self, seq_id):
@@ -465,7 +465,6 @@ _TYPE_RE = re.compile(r"""
 (?P<qualified_type>     [rVK]+) |
 (?P<template_param>     T) |
 (?P<indirect_type>      [PRO]) |
-(?P<substitution>       S (?= [0-9A-Z_])) |
 (?P<expr_primary>       (?= L)) |
 (?P<template_arg_pack>  J)
 """, re.X)
@@ -495,13 +494,6 @@ def _parse_type(cursor):
             return None
         node = _handle_indirect(match.group('indirect_type'), ty)
         cursor.add_subst(node)
-    elif match.group('substitution') is not None:
-        seq_id = _parse_seq_id(cursor)
-        if seq_id is None:
-            return None
-        node = cursor.resolve_subst(seq_id)
-        if node is None:
-            return None
     elif match.group('expr_primary') is not None:
         node = _parse_expr_primary(cursor)
     elif match.group('template_arg_pack') is not None:
