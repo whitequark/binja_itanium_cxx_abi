@@ -17,12 +17,13 @@ Name nodes:
     * `tpl_args`: `node.value` (`tuple`) holds a sequence of type nodes
     * `qual_name`: `node.value` (`tuple`) holds a sequence of `name` and `tpl_args` nodes,
       possibly ending in a `ctor`, `dtor` or `operator` node
+    * `abi`: `node.value` holds a name node, `node.qual` (`frozenset`) holds a set of ABI tags
 
 Type nodes:
     * `name` and `qual_name` specify a type by its name
     * `builtin`: `node.value` (`str`) specifies a builtin type by its name
     * `pointer`, `lvalue` and `rvalue`: `node.value` holds a pointee type node
-    * `cv_qual`: `node.value` holds a type node, `node.qual` (`set`) is any of
+    * `cv_qual`: `node.value` holds a type node, `node.qual` (`frozenset`) is any of
       `"const"`, `"volatile"`, or `"restrict"`
     * `literal`: `node.value` (`str`) holds the literal representation as-is,
       `node.ty` holds a type node specifying the type of the literal
@@ -174,7 +175,9 @@ class QualNode(namedtuple('QualNode', 'kind value qual')):
         return "<QualNode {} {} {}>".format(self.kind, repr(self.qual), repr(self.value))
 
     def __str__(self):
-        if self.kind == 'cv_qual':
+        if self.kind == 'abi':
+            return str(self.value) + "".join(['[abi:' + tag + ']' for tag in self.qual])
+        elif self.kind == 'cv_qual':
             return ' '.join([str(self.value)] + list(self.qual))
         else:
             assert False
@@ -336,7 +339,7 @@ def _handle_cv(qualifiers, node):
     if 'K' in qualifiers:
         qualifier_set.add('const')
     if qualifier_set:
-        return QualNode('cv_qual', node, qualifier_set)
+        return QualNode('cv_qual', node, frozenset(qualifier_set))
     return node
 
 def _handle_indirect(qualifier, node):
@@ -348,13 +351,6 @@ def _handle_indirect(qualifier, node):
         return Node('rvalue', node)
     return node
 
-
-def _parse_source_name(cursor, length):
-    name_len = int(length)
-    name = cursor.advance(name_len)
-    if name is None:
-        return None
-    return name
 
 def _parse_seq_id(cursor):
     seq_id = cursor.advance_until('_')
@@ -375,8 +371,19 @@ def _parse_until_end(cursor, kind, fn):
     return Node(kind, tuple(nodes))
 
 
+_SOURCE_NAME_RE = re.compile(r"\d+")
+
+def _parse_source_name(cursor):
+    match = cursor.match(_SOURCE_NAME_RE)
+    name_len = int(match.group(0))
+    name = cursor.advance(name_len)
+    if name is None:
+        return None
+    return name
+
+
 _NAME_RE = re.compile(r"""
-(?P<source_name>        \d+)    |
+(?P<source_name>        (?= \d)) |
 (?P<ctor_name>          C[123]) |
 (?P<dtor_name>          D[012]) |
 (?P<std_name>           S[absiod]) |
@@ -395,7 +402,7 @@ def _parse_name(cursor, is_nested=False):
     if match is None:
         return None
     elif match.group('source_name') is not None:
-        name = _parse_source_name(cursor, match.group('source_name'))
+        name = _parse_source_name(cursor)
         if name is None:
             return None
         node = Node('name', name)
@@ -448,6 +455,12 @@ def _parse_name(cursor, is_nested=False):
         node = _parse_until_end(cursor, 'tpl_args', _parse_type)
     if node is None:
         return None
+
+    abi_tags = []
+    while cursor.accept('B'):
+        abi_tags.append(_parse_source_name(cursor))
+    if abi_tags:
+        node = QualNode('abi', node, frozenset(abi_tags))
 
     if not is_nested and cursor.accept('I') and (
             node.kind == 'name' or
@@ -728,6 +741,8 @@ class TestDemangler(unittest.TestCase):
                              'void foo<std::allocator<char>>(std::allocator<char>)')
         self.assertDemangles('_Z3fooI3barS0_E', 'foo<bar, bar>')
 
+    def test_abi_tag(self):
+        self.assertDemangles('_Z3fooB5cxx11v', 'foo[abi:cxx11]()')
 
 if __name__ == '__main__':
     import sys
