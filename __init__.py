@@ -68,11 +68,10 @@ def analyze_cxx_abi(view, start=None, length=None, task=None):
         'unsigned long long':   Type.int(long_long_size, sign=False),
         '__int128':             Type.int(16, sign=True),
         'unsigned __int128':    Type.int(16, sign=False),
-        # https://github.com/Vector35/binaryninja-api/issues/912
-        # 'float':                Type.float(4),
-        # 'double':               Type.float(8),
-        # '__float80':            Type.float(10),
-        # '__float128':           Type.float(16),
+        'float':                Type.float(4),
+        'double':               Type.float(8),
+        '__float80':            Type.float(10),
+        '__float128':           Type.float(16),
         'char32_t':             Type.int(4, sign=char_signed, altname='char32_t'),
         'char16_t':             Type.int(2, sign=char_signed, altname='char16_t'),
     }
