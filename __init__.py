@@ -125,8 +125,7 @@ def analyze_cxx_abi(view, start=None, length=None, task=None):
             if arg_nodes[-1].kind == 'builtin' and arg_nodes[-1].value == '...':
                 arg_nodes.pop()
                 var_arg = True
-
-            if arg_nodes[0].kind == 'builtin' and arg_nodes[0].value == 'void':
+            elif arg_nodes[0].kind == 'builtin' and arg_nodes[0].value == 'void':
                 arg_nodes = arg_nodes[1:]
 
             this_arg = False
