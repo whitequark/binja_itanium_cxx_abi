@@ -1,6 +1,6 @@
 import unittest
 
-from itanium_demangler.demangler import parse, _operators, _builtin_types
+from itanium_demangler import parse, _operators, _builtin_types
 
 
 class TestDemangler(unittest.TestCase):
