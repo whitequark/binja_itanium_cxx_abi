@@ -1,14 +1,16 @@
 {
-  "plugin": {
-    "name": "Itanium C++ ABI",
-    "version": "0.1",
-    "author": "whitequark",
-    "type": ["analysis"],
-    "api": "python2",
-    "description": "A plugin providing an analysis for Itanium C++ ABI.",
-    "longdescription": "This plugin provides a custom demangler, an analysis that decodes mangled names and updates function signatures, and an analysis that decodes RTTI and vtables and discovers new procedures based on virtual function pointers.",
-    "license": {
-      "name": "BSD-0-clause"
-    }
+  "pluginmetadataversion" : 2,
+  "name": "Itanium C++ ABI",
+  "type": ["analysis"],
+  "api": ["python2", "python3"],
+  "description": "A plugin providing an analysis for Itanium C++ ABI.",
+  "longdescription": "This plugin provides a custom demangler, an analysis that decodes mangled names and updates function signatures, and an analysis that decodes RTTI and vtables and discovers new procedures based on virtual function pointers.",
+  "version": "1.0",
+  "author": "whitequark",
+  "minimumbinaryninjaversion": 555,
+  "platforms": ["Darwin", "Linux", "Windows"],
+  "license": {
+    "name": "BSD-0-clause",
+    "text": "Copyright (C) 2018 by whitequark\n\nPermission to use, copy, modify, and/or distribute this software for any purpose with or without fee is hereby granted.\n\nTHE SOFTWARE IS PROVIDED \"AS IS\" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE."
   }
 }
