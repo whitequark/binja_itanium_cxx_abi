@@ -632,11 +632,11 @@ def _parse_special(cursor):
             return None
         if match.group('kind') == 'V':
             return Node('vtable', name)
-        elif match.group('kind') == 'T' is not None:
+        elif match.group('kind') == 'T':
             return Node('vtt', name)
-        elif match.group('kind') == 'I' is not None:
+        elif match.group('kind') == 'I':
             return Node('typeinfo', name)
-        elif match.group('kind') == 'S' is not None:
+        elif match.group('kind') == 'S':
             return Node('typeinfo_name', name)
     elif match.group('nonvirtual_thunk') is not None:
         func = _parse_encoding(cursor)
