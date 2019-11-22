@@ -5,7 +5,10 @@ from binaryninja.binaryview import BinaryReader
 from binaryninja.types import Symbol, Type, Structure, NamedTypeReference
 from binaryninja.enums import SymbolType, ReferenceType
 
-from .demangler import Node, parse as parse_mangled
+import sys
+import os.path
+sys.path.append(os.path.join(os.path.dirname(__file__), "itanium_demangler"))
+from itanium_demangler import Node, parse as parse_mangled
 
 
 def analyze_cxx_abi(view, start=None, length=None, task=None):
