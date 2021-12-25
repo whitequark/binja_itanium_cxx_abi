@@ -2,7 +2,12 @@ import re
 from binaryninja import log
 from binaryninja.plugin import PluginCommand, BackgroundTaskThread
 from binaryninja.binaryview import BinaryReader
-from binaryninja.types import Symbol, Type, Structure, NamedTypeReference
+from binaryninja.types import Symbol, Type, NamedTypeReference
+# Structure has been deprecated in favor of the StructureBuilder API.
+try:
+    from binaryninja.types import StructureBuilder
+except ImportError:
+    from binaryninja.types import Structure
 from binaryninja.enums import SymbolType, ReferenceType
 
 import sys
@@ -27,7 +32,10 @@ def analyze_cxx_abi(view, start=None, length=None, task=None):
         return Type.array(Type.int(1), strings[0].length)
 
     def type_info_ty(kind=None):
-        type_info_struct = Structure()
+        try:
+            type_info_struct = StructureBuilder.create()
+        except NameError:
+            type_info_struct = Structure()
         type_info_struct.append(void_p_ty, 'vtable')
         type_info_struct.append(char_p_ty, 'name')
         if kind == 'si_class':
@@ -35,7 +43,10 @@ def analyze_cxx_abi(view, start=None, length=None, task=None):
         return Type.structure_type(type_info_struct)
 
     def vtable_ty(vfunc_count):
-        vtable_struct = Structure()
+        try:
+            vtable_struct = StructureBuilder.create()
+        except NameError:
+            vtable_struct = Structure()
         vtable_struct.append(signed_int_ty, 'top_offset')
         vtable_struct.append(base_type_info_ptr_ty, 'typeinfo')
         vtable_struct.append(Type.array(void_p_ty, vfunc_count), 'functions')
