@@ -2,7 +2,7 @@ import re
 from binaryninja import log
 from binaryninja.plugin import PluginCommand, BackgroundTaskThread
 from binaryninja.binaryview import BinaryReader
-from binaryninja.types import Symbol, Type, NamedTypeReference
+from binaryninja.types import Symbol, Type, NamedTypeReferenceBuilder
 # Structure has been deprecated in favor of the StructureBuilder API.
 try:
     from binaryninja.types import StructureBuilder
@@ -25,7 +25,8 @@ def analyze_cxx_abi(view, start=None, length=None, task=None):
     unsigned_int_ty = Type.int(arch.default_int_size, False)
     signed_int_ty = Type.int(arch.default_int_size, True)
 
-    base_type_info_ty = Type.named_type(NamedTypeReference(name='std::type_info'))
+    base_type_info_ty = Type.named_type(NamedTypeReferenceBuilder.create(
+        name='std::type_info'))
     base_type_info_ptr_ty = Type.pointer(arch, base_type_info_ty)
 
     def char_array_ty(length):
@@ -67,7 +68,7 @@ def analyze_cxx_abi(view, start=None, length=None, task=None):
 
     ty_for_cxx_builtin = {
         'void':                 Type.void(),
-        'wchar_t':              Type.int(2, sign=char_signed, altname='wchar_t'),
+        'wchar_t':              Type.int(2, sign=char_signed, alternate_name='wchar_t'),
         'bool':                 Type.bool(),
         'char':                 Type.int(1, sign=char_signed),
         'signed char':          Type.int(1, sign=True),
@@ -86,8 +87,8 @@ def analyze_cxx_abi(view, start=None, length=None, task=None):
         'double':               Type.float(8),
         '__float80':            Type.float(10),
         '__float128':           Type.float(16),
-        'char32_t':             Type.int(4, sign=char_signed, altname='char32_t'),
-        'char16_t':             Type.int(2, sign=char_signed, altname='char16_t'),
+        'char32_t':             Type.int(4, sign=char_signed, alternate_name='char32_t'),
+        'char16_t':             Type.int(2, sign=char_signed, alternate_name='char16_t'),
     }
 
     def ty_from_demangler_node(node, cv_qual=frozenset(), arg_count_hint=None):
@@ -97,7 +98,7 @@ def analyze_cxx_abi(view, start=None, length=None, task=None):
             else:
                 return None
         elif node.kind in ['name', 'qual_name']:
-            named_ty_ref = NamedTypeReference(name=str(node))
+            named_ty_ref = NamedTypeReferenceBuilder.create(name=str(node))
             return Type.named_type(named_ty_ref)
         elif node.kind in ['pointer', 'lvalue', 'rvalue']:
             pointee_ty = ty_from_demangler_node(node.value)
