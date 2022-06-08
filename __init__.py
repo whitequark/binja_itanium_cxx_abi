@@ -13,7 +13,7 @@ from binaryninja.enums import SymbolType, ReferenceType
 import sys
 import os.path
 sys.path.append(os.path.join(os.path.dirname(__file__), "itanium_demangler"))
-from itanium_demangler import Node, parse as parse_mangled
+from itanium_demangler import Node, parse as parse_mangled, is_ctor_or_dtor
 
 
 def analyze_cxx_abi(view, start=None, length=None, task=None):
@@ -134,7 +134,6 @@ def analyze_cxx_abi(view, start=None, length=None, task=None):
 
             arg_nodes = list(node.arg_tys)
             arg_tys = []
-
             var_arg = False
             if arg_nodes[-1].kind == 'builtin' and arg_nodes[-1].value == '...':
                 arg_nodes.pop()
@@ -153,6 +152,14 @@ def analyze_cxx_abi(view, start=None, length=None, task=None):
                     if this_ty is None:
                         return None
                     arg_tys.append(Type.pointer(arch, this_ty))
+                    if is_ctor_dtor:
+                        name = '::'.join(str(n) for n in qual_name[:-1])
+                        # Don't double register types or register std types
+                        if not name.startswith('std') and not view.get_type_by_name(name):
+                            log.log_info(f'Registering new type {name}')
+                            void_p_ty = Type.pointer(arch, Type.void())
+                            with StructureBuilder.builder(view, name) as s:
+                                s.append(Type.pointer(arch, void_p_ty), 'vtable')
 
             for arg_node in arg_nodes:
                 arg_ty = ty_from_demangler_node(arg_node)
@@ -163,7 +170,7 @@ def analyze_cxx_abi(view, start=None, length=None, task=None):
             ty = Type.function(ret_ty, arg_tys, variable_arguments=var_arg)
             if arg_count_hint is not None:
                 # toplevel invocation, so return whether we inferred a this argument
-                return this_arg, ty
+                return this_arg, ty, is_ctor_dtor
             else:
                 return ty
         else:
@@ -313,8 +320,27 @@ def analyze_cxx_abi(view, start=None, length=None, task=None):
             demangled = ty_from_demangler_node(name_ast,
                                                arg_count_hint=len(func.function_type.parameters))
             if demangled is not None:
-                this_arg, ty = demangled
+                this_arg, ty, dtor_ctor = demangled
                 func.apply_auto_discovered_type(ty)
+                if dtor_ctor and this_arg:
+                    start = func.address_ranges[0].start
+                    callers = list(view.get_callers(start))
+                    for caller in callers:
+                        # Iterate calls to function
+                        try:
+                            il_call = next(ins for ins in view.hlil_instructions if ins.address == caller.address)
+                        except StopIteration:
+                            continue
+                        # If the calling function is a ctor/dtor, it's probably running inherited constructors
+                        # so we shouldn't override the type
+                        if is_ctor_or_dtor(il_call.function.source_function.name):
+                            continue
+                        if not il_call.params:
+                            continue
+                        this = il_call.params[0]
+                        class_type = func.parameter_vars[0].type
+                        if hasattr(this, 'var'):
+                            this.var.type = class_type
 
     view.update_analysis()
 

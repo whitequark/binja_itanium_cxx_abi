@@ -699,6 +699,19 @@ def parse(raw):
         ast = _expand_arg_packs(ast)
     return ast
 
+def is_ctor_or_dtor(raw) -> bool:
+    ast = parse(raw)
+    return ast and _is_ctor_or_dtor(ast)
+
+def _is_ctor_or_dtor(ast) -> bool:
+    if ast.kind == 'func':
+        return _is_ctor_or_dtor(ast.name)
+    elif ast.kind == 'qual_name':
+        kind = ast.value[-1].kind
+        return kind == 'ctor' or kind == 'dtor'
+    else:
+       return False
+
 # ================================================================================================
 
 
