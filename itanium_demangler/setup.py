@@ -9,6 +9,7 @@ setuptools.setup(
     description="Pure Python parser for mangled itanium symbols",
     long_description=open("README.md").read(),
     long_description_content_type="text/markdown",
+    license="BSD",
     url="https://github.com/whitequark/python-itanium_demangler",
     packages=setuptools.find_packages(),
     classifiers=[
