@@ -136,11 +136,11 @@ class Node(namedtuple('Node', 'kind value')):
         elif self.kind == 'oper_cast':
             return 'operator ' + str(self.value)
         elif self.kind == 'pointer':
-            return str(self.value) + '*'
+            return self.value.left() + '*' + self.value.right()
         elif self.kind == 'lvalue':
-            return str(self.value) + '&'
+            return self.value.left() + '&' + self.value.right()
         elif self.kind == 'rvalue':
-            return str(self.value) + '&&'
+            return self.value.left() + '&&' + self.value.right()
         elif self.kind == 'tpl_param':
             return '{T' + str(self.value) + '}'
         elif self.kind == 'subst':
@@ -157,8 +157,28 @@ class Node(namedtuple('Node', 'kind value')):
             return 'non-virtual thunk for ' + str(self.value)
         elif self.kind == 'virt_thunk':
             return 'virtual thunk for ' + str(self.value)
+        elif self.kind == 'guard_variable':
+            return 'guard variable for ' + str(self.value)
+        elif self.kind == 'transaction_clone':
+            return 'transaction clone for ' + str(self.value)
         else:
             return repr(self)
+
+    def left(self):
+        if self.kind == "pointer":
+            return self.value.left() + "*"
+        elif self.kind == "lvalue":
+            return self.value.left() + "&"
+        elif self.kind == "rvalue":
+            return self.value.left() + "&&"
+        else:
+            return str(self)
+
+    def right(self):
+        if self.kind in ("pointer", "lvalue", "rvalue"):
+            return self.value.right()
+        else:
+            return ""
 
     def map(self, f):
         if self.kind in ('oper_cast', 'pointer', 'lvalue', 'rvalue', 'expand_arg_pack',
@@ -182,6 +202,12 @@ class QualNode(namedtuple('QualNode', 'kind value qual')):
         else:
             return repr(self)
 
+    def left(self):
+        return str(self)
+
+    def right(self):
+        return ""
+
     def map(self, f):
         if self.kind == 'cv_qual':
             return self._replace(value=f(self.value))
@@ -198,6 +224,12 @@ class CastNode(namedtuple('CastNode', 'kind value ty')):
             return '(' + str(self.ty) + ')' + str(self.value)
         else:
             return repr(self)
+
+    def left(self):
+        return str(self)
+
+    def right(self):
+        return ""
 
     def map(self, f):
         if self.kind == 'literal':
@@ -226,11 +258,103 @@ class FuncNode(namedtuple('FuncNode', 'kind name arg_tys ret_ty')):
         else:
             return repr(self)
 
+    def left(self):
+        if self.kind == 'func':
+            result = ""
+            if self.ret_ty is not None:
+                result += str(self.ret_ty) + ' '
+            result += "("
+            if self.name is not None:
+                result += str(self.name)
+            return result
+        else:
+            return str(self)
+
+    def right(self):
+        if self.kind == 'func':
+            result = ")"
+            if self.arg_tys == (Node('builtin', 'void'),):
+                result += '()'
+            else:
+                result += '(' + ', '.join(map(str, self.arg_tys)) + ')'
+            return result
+        else:
+            return ""
+
     def map(self, f):
         if self.kind == 'func':
             return self._replace(name=f(self.name) if self.name else None,
                                  arg_tys=tuple(map(f, self.arg_tys)),
                                  ret_ty=f(self.ret_ty) if self.ret_ty else None)
+        else:
+            return self
+
+
+class ArrayNode(namedtuple('ArrayNode', 'kind dimension ty')):
+    def __repr__(self):
+        return "<ArrayNode {} {} {}>".format(self.kind, repr(self.dimension), repr(self.ty))
+
+    def __str__(self):
+        if self.kind == 'array':
+            result = ""
+            result += str(self.ty)
+            result += "[" + str(self.dimension) + "]"
+            return result
+        else:
+            return repr(self)
+
+    def left(self):
+        if self.kind == 'array':
+            result = str(self.ty) + "("
+            return result
+        else:
+            return str(self)
+
+    def right(self):
+        if self.kind == 'array':
+            result = ")[" + str(self.dimension) + "]"
+            return result
+        else:
+            return ""
+
+    def map(self, f):
+        if self.kind == 'array':
+            return self._replace(dimension=f(self.dimension) if self.dimension else None,
+                                 ty=f(self.ty) if self.ty else None)
+        else:
+            return self
+
+
+class MemberNode(namedtuple('MemberNode', 'kind cls_ty member_ty')):
+    def __repr__(self):
+        return "<MemberNode {} {} {}>".format(self.kind, repr(self.cls_ty), repr(self.member_ty))
+
+    def __str__(self):
+        if self.kind == 'data':
+            result = str(self.member_ty) + " " + str(self.cls_ty) + "::*"
+            return result
+        elif self.kind == 'method':
+            result = self.member_ty.left() + str(self.cls_ty) + "::*" + self.member_ty.right()
+            return result
+        else:
+            return repr(self)
+
+    def left(self):
+        if self.kind == 'method':
+            return self.member_ty.left() + str(self.cls_ty) + "::*"
+        else:
+            return str(self)
+
+    def right(self):
+        if self.kind == 'method':
+            return self.member_ty.right()
+        else:
+            return ""
+
+    def map(self, f):
+        if self.kind in ('data', 'func'):
+            return self._replace(cls_ty=f(self.cls_ty) if self.cls_ty else None,
+                                 member_ty=f(self.member_ty) if self.member_ty else None)
         else:
             return self
 
@@ -305,30 +429,35 @@ _operators = {
 }
 
 _builtin_types = {
-    'v':  'void',
-    'w':  'wchar_t',
-    'b':  'bool',
-    'c':  'char',
-    'a':  'signed char',
-    'h':  'unsigned char',
-    's':  'short',
-    't':  'unsigned short',
-    'i':  'int',
-    'j':  'unsigned int',
-    'l':  'long',
-    'm':  'unsigned long',
-    'x':  'long long',
-    'y':  'unsigned long long',
-    'n':  '__int128',
-    'o':  'unsigned __int128',
-    'f':  'float',
-    'd':  'double',
-    'e':  '__float80',
-    'g':  '__float128',
-    'z':  '...',
-    'Di': 'char32_t',
-    'Ds': 'char16_t',
-    'Da': 'auto',
+    'v':  Node('builtin', 'void'),
+    'w':  Node('builtin', 'wchar_t'),
+    'b':  Node('builtin', 'bool'),
+    'c':  Node('builtin', 'char'),
+    'a':  Node('builtin', 'signed char'),
+    'h':  Node('builtin', 'unsigned char'),
+    's':  Node('builtin', 'short'),
+    't':  Node('builtin', 'unsigned short'),
+    'i':  Node('builtin', 'int'),
+    'j':  Node('builtin', 'unsigned int'),
+    'l':  Node('builtin', 'long'),
+    'm':  Node('builtin', 'unsigned long'),
+    'x':  Node('builtin', 'long long'),
+    'y':  Node('builtin', 'unsigned long long'),
+    'n':  Node('builtin', '__int128'),
+    'o':  Node('builtin', 'unsigned __int128'),
+    'f':  Node('builtin', 'float'),
+    'd':  Node('builtin', 'double'),
+    'e':  Node('builtin', '__float80'),
+    'g':  Node('builtin', '__float128'),
+    'z':  Node('builtin', '...'),
+    'Dd': Node('builtin', '_Decimal64'),
+    'De': Node('builtin', '_Decimal128'),
+    'Df': Node('builtin', '_Decimal32'),
+    'Dh': Node('builtin', '_Float16'),
+    'Di': Node('builtin', 'char32_t'),
+    'Ds': Node('builtin', 'char16_t'),
+    'Da': Node('builtin', 'auto'),
+    'Dn': Node('qual_name', (Node('name', 'std'), Node('builtin', 'nullptr_t')))
 }
 
 
@@ -353,6 +482,14 @@ def _handle_indirect(qualifier, node):
         return Node('rvalue', node)
     return node
 
+
+_NUMBER_RE = re.compile(r"\d+")
+
+def _parse_number(cursor):
+    match = cursor.match(_NUMBER_RE)
+    if match is None:
+        return None
+    return int(match.group(0))
 
 def _parse_seq_id(cursor):
     seq_id = cursor.advance_until('_')
@@ -398,7 +535,10 @@ _NAME_RE = re.compile(r"""
 (?P<nested_name>        N (?P<cv_qual> [rVK]*) (?P<ref_qual> [RO]?)) |
 (?P<template_param>     T) |
 (?P<template_args>      I) |
-(?P<constant>           L)
+(?P<constant>           L) |
+(?P<local_name>         Z) |
+(?P<unnamed_type>       Ut) |
+(?P<closure_type>       Ul)
 """, re.X)
 
 def _parse_name(cursor, is_nested=False):
@@ -466,6 +606,12 @@ def _parse_name(cursor, is_nested=False):
     elif match.group('constant') is not None:
         # not in the ABI doc, but probably means `const`
         return _parse_name(cursor, is_nested)
+    elif match.group('local_name') is not None:
+        raise NotImplementedError("local names are not supported")
+    elif match.group('unnamed_type') is not None:
+        raise NotImplementedError("unnamed types are not supported")
+    elif match.group('closure_type') is not None:
+        raise NotImplementedError("closure (lambda) types are not supported")
     if node is None:
         return None
 
@@ -476,18 +622,19 @@ def _parse_name(cursor, is_nested=False):
         node = QualNode('abi', node, frozenset(abi_tags))
 
     if not is_nested and cursor.accept('I') and (
-            node.kind == 'name' or
+            node.kind in ('name', 'oper', 'oper_cast') or
             match.group('std_prefix') is not None or
             match.group('std_name') is not None or
             match.group('substitution') is not None):
-        if node.kind == 'name' or match.group('std_prefix') is not None:
+        if node.kind in ('name', 'oper', 'oper_cast') or match.group('std_prefix') is not None:
             cursor.add_subst(node) # <unscoped-template-name> ::= <substitution>
         templ_args = _parse_until_end(cursor, 'tpl_args', _parse_type)
         if templ_args is None:
             return None
         node = Node('qual_name', (node, templ_args))
-        if (match.group('std_prefix') is not None or
-                match.group('std_name') is not None):
+        if ((match.group('std_prefix') is not None or
+                match.group('std_name') is not None) and
+                node.value[0].value[1].kind not in ('oper', 'oper_cast')):
             cursor.add_subst(node)
 
     return node
@@ -503,7 +650,9 @@ _TYPE_RE = re.compile(r"""
 (?P<expr_primary>       (?= L)) |
 (?P<template_arg_pack>  J) |
 (?P<arg_pack_expansion> Dp) |
-(?P<decltype>           D[tT])
+(?P<decltype>           D[tT]) |
+(?P<array_type>         A) |
+(?P<member_type>        M)
 """, re.X)
 
 def _parse_type(cursor):
@@ -512,7 +661,7 @@ def _parse_type(cursor):
         node = _parse_name(cursor)
         cursor.add_subst(node)
     elif match.group('builtin_type') is not None:
-        node = Node('builtin', _builtin_types[match.group('builtin_type')])
+        node = _builtin_types[match.group('builtin_type')]
     elif match.group('qualified_type') is not None:
         ty = _parse_type(cursor)
         if ty is None:
@@ -548,6 +697,25 @@ def _parse_type(cursor):
         node = Node('expand_arg_pack', node)
     elif match.group('decltype') is not None:
         raise NotImplementedError("decltype is not supported")
+    elif match.group('array_type') is not None:
+        dimension = _parse_number(cursor)
+        if dimension is None:
+            return None
+        else:
+            dimension = CastNode('literal', dimension, Node('builtin', 'int'))
+        if not cursor.accept('_'):
+            return None
+        type = _parse_type(cursor)
+        node = ArrayNode('array', dimension, type)
+        cursor.add_subst(node)
+    elif match.group('member_type') is not None:
+        cls_ty = _parse_type(cursor)
+        member_ty = _parse_type(cursor)
+        if member_ty.kind == 'func':
+            kind = "method"
+        else:
+            kind = "data"
+        node = MemberNode(kind, cls_ty, member_ty)
     else:
         return None
     return node
@@ -594,7 +762,9 @@ def _parse_encoding(cursor):
     if cursor.at_end():
         return name
 
-    if name.kind == 'qual_name' and name.value[-1].kind == 'tpl_args':
+    if name.kind == 'qual_name' \
+            and name.value[-1].kind == 'tpl_args' \
+            and name.value[-2].kind not in ('ctor', 'dtor', 'oper_cast'):
         ret_ty = _parse_type(cursor)
         if ret_ty is None:
             return None
@@ -619,7 +789,10 @@ _SPECIAL_RE = re.compile(r"""
 (?P<rtti>               T (?P<kind> [VTIS])) |
 (?P<nonvirtual_thunk>   Th (?P<nv_offset> n? \d+) _) |
 (?P<virtual_thunk>      Tv (?P<v_offset> n? \d+) _ (?P<vcall_offset> n? \d+) _) |
-(?P<covariant_thunk>    Tc)
+(?P<covariant_thunk>    Tc) |
+(?P<guard_variable>     GV) |
+(?P<extended_temporary> GR) |
+(?P<transaction_clone>  GTt)
 """, re.X)
 
 def _parse_special(cursor):
@@ -650,6 +823,18 @@ def _parse_special(cursor):
         return Node('virt_thunk', func)
     elif match.group('covariant_thunk') is not None:
         raise NotImplementedError("covariant thunks are not supported")
+    elif match.group('guard_variable'):
+        name = _parse_type(cursor)
+        if name is None:
+            return None
+        return Node('guard_variable', name)
+    elif match.group('extended_temporary'):
+        raise NotImplementedError("extended temporaries are not supported")
+    elif match.group('transaction_clone'):
+        func = _parse_encoding(cursor)
+        if func is None:
+            return None
+        return Node('transaction_clone', func)
 
 
 _MANGLED_NAME_RE = re.compile(r"""
@@ -698,6 +883,15 @@ def parse(raw):
     if ast is not None:
         ast = _expand_arg_packs(ast)
     return ast
+
+def is_ctor_or_dtor(ast) -> bool:
+    if ast.kind == 'func':
+        return is_ctor_or_dtor(ast.name)
+    elif ast.kind == 'qual_name':
+        kind = ast.value[-1].kind
+        return kind == 'ctor' or kind == 'dtor'
+    else:
+       return False
 
 # ================================================================================================
 

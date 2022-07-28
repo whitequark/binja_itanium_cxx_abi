@@ -25,6 +25,8 @@ class TestDemangler(unittest.TestCase):
         self.assertDemangles('_ZN3fooD0E', 'foo::{deleting dtor}')
         self.assertDemangles('_ZN3fooD1E', 'foo::{dtor}')
         self.assertDemangles('_ZN3fooD2E', 'foo::{base dtor}')
+        self.assertDemangles('_ZN3fooC1IcEEc', 'foo::{ctor}<char>(char)')
+        self.assertDemangles('_ZN3fooD1IcEEc', 'foo::{dtor}<char>(char)')
 
     def test_operator(self):
         for op in _operators:
@@ -62,7 +64,7 @@ class TestDemangler(unittest.TestCase):
 
     def test_builtin_types(self):
         for ty in _builtin_types:
-            self.assertDemangles('_Z1fI' + ty + 'E', 'f<' + _builtin_types[ty] + '>')
+            self.assertDemangles('_Z1fI' + ty + 'E', 'f<' + str(_builtin_types[ty]) + '>')
 
     def test_qualified_type(self):
         self.assertDemangles('_Z1fIriE', 'f<int restrict>')
@@ -80,6 +82,7 @@ class TestDemangler(unittest.TestCase):
 
     def test_indirect_type(self):
         self.assertDemangles('_Z1fIPiE', 'f<int*>')
+        self.assertDemangles('_Z1fIPPiE', 'f<int**>')
         self.assertDemangles('_Z1fIRiE', 'f<int&>')
         self.assertDemangles('_Z1fIOiE', 'f<int&&>')
         self.assertDemangles('_Z1fIKRiE', 'f<int& const>')
@@ -102,6 +105,8 @@ class TestDemangler(unittest.TestCase):
         self.assertDemangles('_ZTS1f', 'typeinfo name for f')
         self.assertDemangles('_ZThn16_1fv', 'non-virtual thunk for f()')
         self.assertDemangles('_ZTv16_8_1fv', 'virtual thunk for f()')
+        self.assertDemangles('_ZGV1f', 'guard variable for f')
+        self.assertDemangles('_ZGTt1fv', 'transaction clone for f()')
 
     def test_template_param(self):
         self.assertDemangles('_ZN1fIciEEvT_PT0_', 'void f<char, int>(char, int*)')
@@ -122,9 +127,47 @@ class TestDemangler(unittest.TestCase):
         self.assertDemangles('_ZN2n11fEPNS_1bEPNS_2n21cEPNS2_2n31dE',
                              'n1::f(n1::b*, n1::n2::c*, n1::n2::n3::d*)')
         self.assertDemangles('_ZN1f1gES_IFvvEE', 'f::g(f<void ()>)')
+        self.assertDemangles('_ZplIcET_S0_', 'char operator+<char>(char)')
+        self.assertParses('_ZplIcET_S1_', None)
+        # Operator template results don't get added to substitutions
+        self.assertParses('_ZStplIcEvS0_', None)
 
     def test_abi_tag(self):
         self.assertDemangles('_Z3fooB5cxx11v', 'foo[abi:cxx11]()')
 
     def test_const(self):
         self.assertDemangles('_ZL3foo', 'foo')
+
+    def test_operator_template(self):
+        self.assertDemangles('_ZmiIiE', 'operator-<int>')
+        self.assertDemangles('_ZmiIiEvv', 'void operator-<int>()')
+        self.assertDemangles('_ZmiIiEvKT_RT_', 'void operator-<int>(int const, int&)')
+        self.assertDemangles('_ZcviIiE', 'operator int<int>')
+        self.assertDemangles('_ZcviIiEv', 'operator int<int>()')
+        self.assertDemangles('_ZcviIiET_T_', 'operator int<int>(int, int)')
+
+    def test_array(self):
+        self.assertDemangles('_Z1fA1_c', 'f(char[(int)1])')
+        self.assertDemangles('_Z1fRA1_c', 'f(char(&)[(int)1])')
+        self.assertDemangles('_Z1fIA1_cS0_E', 'f<char[(int)1], char[(int)1]>')
+        self.assertParses('_Z1fA1c', None)
+
+    def test_function(self):
+        self.assertDemangles('_Z1fFvvE', 'f(void ())')
+        self.assertDemangles('_Z1fPFvvE', 'f(void (*)())')
+        self.assertDemangles('_Z1fPPFvvE', 'f(void (**)())')
+        self.assertDemangles('_Z1fRPFvvE', 'f(void (*&)())')
+        self.assertDemangles('_Z1fKFvvE', 'f(void () const)')
+
+    def test_member_data(self):
+        self.assertDemangles('_Z1fM3fooi', 'f(int foo::*)')
+        self.assertDemangles('_Z1fMN3foo3barEi', 'f(int foo::bar::*)')
+        self.assertDemangles('_Z1fM3fooN3bar1XE', 'f(bar::X foo::*)')
+        self.assertDemangles('_Z1fM3fooIcE3bar', 'f(bar foo<char>::*)')
+        self.assertDemangles('_Z1fM3foo3barIlE', 'f(bar<long> foo::*)')
+        self.assertDemangles('_Z3fooPM2ABi', 'foo(int AB::**)')
+
+    def test_member_function(self):
+        self.assertDemangles('_Z1fM3fooFvvE', 'f(void (foo::*)())')
+        self.assertDemangles('_Z1fMN3foo3barEFvvE', 'f(void (foo::bar::*)())')
+        self.assertDemangles('_Z3fooRM3barFviE', 'foo(void (bar::*&)(int))')
