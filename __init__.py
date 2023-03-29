@@ -318,7 +318,7 @@ def analyze_cxx_abi(view, start=None, length=None, task=None):
         elif is_code and name_ast.kind == 'func':
             func = view.get_function_at(symbol.address)
             demangled = ty_from_demangler_node(name_ast,
-                                               arg_count_hint=len(func.function_type.parameters))
+                                               arg_count_hint=len(func.type.parameters))
             if demangled is not None:
                 this_arg, ty, dtor_ctor = demangled
                 func.apply_auto_discovered_type(ty)
