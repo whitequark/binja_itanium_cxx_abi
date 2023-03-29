@@ -336,7 +336,7 @@ def analyze_cxx_abi(view, start=None, length=None, task=None):
                         ast = parse_mangled(il_call.function.source_function.name)
                         if ast and is_ctor_or_dtor(ast):
                             continue
-                        if not il_call.params:
+                        if not hasattr(il_call, 'params') or not il_call.params:
                             continue
                         this = il_call.params[0]
                         class_type = func.parameter_vars[0].type
