@@ -337,9 +337,15 @@ def analyze_cxx_abi(view, start=None, length=None, task=None):
                         except StopIteration:
                             continue
 
-                        # If the calling function is a ctor/dtor, it's probably running inherited constructors
-                        # so we shouldn't override the type
-                        ast = parse_mangled(il_call.function.source_function.name)
+                        try:
+                            # If the calling function is a ctor/dtor, it's 
+                            # probably running inherited constructors
+                            # so we shouldn't override the type
+                            ast = parse_mangled(il_call.function.source_function.name)
+                        except NotImplementedError as e:
+                            log.log_warn("Demangler feature missing on {}: {}".format(il_call.function.source_function.name, str(e)))
+                            demangler_failures += 1
+
                         if ast and is_ctor_or_dtor(ast):
                             continue
                         if not hasattr(il_call, 'params') or not il_call.params:
