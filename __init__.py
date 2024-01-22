@@ -381,7 +381,9 @@ class CxxAbiAnalysis(BackgroundTaskThread):
 
     def run(self):
         try:
+            state = self._view.begin_undo_actions()
             analyze_cxx_abi(self._view, task=self)
+            self._view.commit_undo_actions(state)
         finally:
             self.finish()
 
