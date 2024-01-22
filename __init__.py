@@ -12,7 +12,9 @@ from binaryninja.enums import SymbolType, ReferenceType
 
 import sys
 import os.path
-sys.path.append(os.path.join(os.path.dirname(__file__), "itanium_demangler"))
+# Prepend so if the itanium-demangler package is installed elsewhere it doesn't 
+# interfere
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "itanium_demangler"))
 from itanium_demangler import Node, parse as parse_mangled, is_ctor_or_dtor
 
 
