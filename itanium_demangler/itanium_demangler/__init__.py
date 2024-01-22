@@ -711,7 +711,7 @@ def _parse_type(cursor):
     elif match.group('member_type') is not None:
         cls_ty = _parse_type(cursor)
         member_ty = _parse_type(cursor)
-        if member_ty.kind == 'func':
+        if member_ty is not None and member_ty.kind == 'func':
             kind = "method"
         else:
             kind = "data"
@@ -749,7 +749,9 @@ def _expand_template_args(func):
         if name_suffix.kind == 'tpl_args':
             tpl_args = name_suffix.value
             def mapper(node):
-                if node.kind == 'tpl_param' and node.value < len(tpl_args):
+                if node is None:
+                    return None
+                elif node.kind == 'tpl_param' and node.value < len(tpl_args):
                     return tpl_args[node.value]
                 return node.map(mapper)
             return mapper(func)
@@ -858,7 +860,9 @@ def _parse_mangled_name(cursor):
 
 def _expand_arg_packs(ast):
     def mapper(node):
-        if node.kind == 'tpl_args':
+        if node is None:
+            return None
+        elif node.kind == 'tpl_args':
             exp_args = []
             for arg in node.value:
                 if arg.kind in ['tpl_arg_pack', 'tpl_args']:
@@ -871,6 +875,7 @@ def _expand_arg_packs(ast):
             exp_arg_tys = []
             for arg_ty in node.arg_tys:
                 if arg_ty.kind == 'expand_arg_pack' and \
+                        arg_ty.value is not None and \
                         arg_ty.value.kind == 'rvalue' and \
                             arg_ty.value.value.kind in ['tpl_arg_pack', 'tpl_args']:
                     exp_arg_tys += arg_ty.value.value.value
