@@ -12,7 +12,9 @@ from binaryninja.enums import SymbolType, ReferenceType
 
 import sys
 import os.path
-sys.path.append(os.path.join(os.path.dirname(__file__), "itanium_demangler"))
+# Prepend so if the itanium-demangler package is installed elsewhere it doesn't 
+# interfere
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "itanium_demangler"))
 from itanium_demangler import Node, parse as parse_mangled, is_ctor_or_dtor
 
 
@@ -335,9 +337,15 @@ def analyze_cxx_abi(view, start=None, length=None, task=None):
                         except StopIteration:
                             continue
 
-                        # If the calling function is a ctor/dtor, it's probably running inherited constructors
-                        # so we shouldn't override the type
-                        ast = parse_mangled(il_call.function.source_function.name)
+                        try:
+                            # If the calling function is a ctor/dtor, it's 
+                            # probably running inherited constructors
+                            # so we shouldn't override the type
+                            ast = parse_mangled(il_call.function.source_function.name)
+                        except NotImplementedError as e:
+                            log.log_warn("Demangler feature missing on {}: {}".format(il_call.function.source_function.name, str(e)))
+                            demangler_failures += 1
+
                         if ast and is_ctor_or_dtor(ast):
                             continue
                         if not hasattr(il_call, 'params') or not il_call.params:
@@ -373,7 +381,9 @@ class CxxAbiAnalysis(BackgroundTaskThread):
 
     def run(self):
         try:
+            state = self._view.begin_undo_actions()
             analyze_cxx_abi(self._view, task=self)
+            self._view.commit_undo_actions(state)
         finally:
             self.finish()
 
