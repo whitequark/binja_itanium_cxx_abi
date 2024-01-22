@@ -846,10 +846,13 @@ def _parse_mangled_name(cursor):
     if match is None:
         return None
     else:
+        cursor_position = cursor._pos
         special = _parse_special(cursor)
         if special is not None:
             return special
 
+        # Return the cursor position to it's previous state before continuing
+        cursor._pos = cursor_position
         return _parse_encoding(cursor)
 
 
