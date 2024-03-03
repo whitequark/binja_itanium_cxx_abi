@@ -10,11 +10,7 @@ except ImportError:
     from binaryninja.types import Structure
 from binaryninja.enums import SymbolType, ReferenceType
 
-import sys
-import os.path
-sys.path.append(os.path.join(os.path.dirname(__file__), "itanium_demangler"))
-from itanium_demangler import Node, parse as parse_mangled, is_ctor_or_dtor
-
+from .itanium_demangler.itanium_demangler import Node, parse as parse_mangled
 
 def analyze_cxx_abi(view, start=None, length=None, task=None):
     platform = view.platform
